@@ -1,0 +1,5 @@
+Env: !Ref EnvName
+Alias: !GetAtt LambdaRole.Arn
+NestedAttr: !GetAtt Nested.Outputs.Value
+Msg: !Sub "hi ${EnvName}"
+Choice: !If [IsProd, a, b]
