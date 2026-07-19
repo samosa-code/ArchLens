@@ -1,0 +1,26 @@
+# Internal planning docs — not published for now
+internal-docs/
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+archlens-output/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Env
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
