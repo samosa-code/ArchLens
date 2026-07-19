@@ -11,3 +11,30 @@ export type AstNode =
   | { kind: 'object'; entries: AstEntry[]; pos: SourcePosition }
   | { kind: 'array'; items: AstNode[]; pos: SourcePosition }
   | { kind: 'scalar'; value: string | number | boolean | null; pos: SourcePosition };
+
+/**
+ * The result of resolving a property value (from an {@link AstNode}) against
+ * a template's `Parameters`/`Resources`/`Mappings`, produced by
+ * `parser/intrinsics.ts`.
+ *
+ * `object` and `list` mirror non-intrinsic structure from the source AST
+ * (position metadata dropped, since a resolved value may combine pieces
+ * from several source locations). `resourceRef`/`attributeRef`/
+ * `parameterRef`/`pseudoParameterRef` are deploy-time-unknown by nature —
+ * resolving further would mean guessing, which we don't do. `unresolved`
+ * covers anything genuinely undeterminable (undefined name, dynamic index,
+ * malformed arguments) and always carries a human-readable reason.
+ */
+export type ResolvedValue =
+  | { kind: 'scalar'; value: string | number | boolean | null }
+  | { kind: 'list'; items: ResolvedValue[] }
+  | { kind: 'object'; entries: { key: string; value: ResolvedValue }[] }
+  /** `Ref` to a declared `Resources` entry — the "reference edge" the graph model builds on. */
+  | { kind: 'resourceRef'; logicalId: string }
+  /** `Fn::GetAtt`, from either its array form or its dotted-string form. */
+  | { kind: 'attributeRef'; logicalId: string; attribute: string }
+  /** `Ref` to a declared `Parameters` entry with no statically-known `Default`. */
+  | { kind: 'parameterRef'; name: string }
+  /** `Ref` to an `AWS::*` pseudo parameter (e.g. `AWS::Region`) — always deploy-time-unknown. */
+  | { kind: 'pseudoParameterRef'; name: string }
+  | { kind: 'unresolved'; reason: string };

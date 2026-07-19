@@ -5,6 +5,7 @@ import { parseTree, printParseErrorCode } from 'jsonc-parser';
 import type { Node as JsonNode, ParseError } from 'jsonc-parser';
 import type { AstEntry, SourcePosition } from '../common/interfaces.js';
 import type { AstNode } from '../common/types.js';
+import { splitGetAttShorthand } from './getAttShorthand.js';
 
 /**
  * Converts a character offset into a source string to a 1-indexed
@@ -73,9 +74,7 @@ function wrapShortFormTag(longKey: string, node: YamlNode, source: string, file:
 
   let value: AstNode;
   if (longKey === 'Fn::GetAtt' && isScalar(node)) {
-    const raw = String(node.value);
-    const dot = raw.indexOf('.');
-    const parts = dot === -1 ? [raw] : [raw.slice(0, dot), raw.slice(dot + 1)];
+    const parts = splitGetAttShorthand(String(node.value));
     value = { kind: 'array', items: parts.map((part) => ({ kind: 'scalar', value: part, pos })), pos };
   } else {
     value = convertNode(node, source, file);

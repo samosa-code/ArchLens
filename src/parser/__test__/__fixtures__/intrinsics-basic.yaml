@@ -1,0 +1,38 @@
+Parameters:
+  EnvName:
+    Type: String
+  InstanceType:
+    Type: String
+    Default: t2.micro
+
+Resources:
+  MyBucket:
+    Type: AWS::S3::Bucket
+
+  Consumer:
+    Type: AWS::Custom::Thing
+    Properties:
+      RefToResource: !Ref MyBucket
+      RefToParamWithDefault: !Ref InstanceType
+      RefToParamNoDefault: !Ref EnvName
+      RefToPseudo: !Ref AWS::Region
+      RefToUndefined: !Ref DoesNotExist
+      GetAttArrayForm:
+        Fn::GetAtt: [MyBucket, Arn]
+      GetAttDottedForm: !GetAtt MyBucket.Arn
+      GetAttNestedAttr: !GetAtt MyBucket.Outputs.Value
+      GetAttUndefinedResource: !GetAtt NoSuchResource.Arn
+      JoinFullyStatic: !Join ["-", ["a", "b", "c"]]
+      JoinWithReference: !Join ["-", [!Ref MyBucket, "suffix"]]
+      JoinNonLiteralDelimiter: !Join [!Ref EnvName, ["a", "b"]]
+      SelectStaticIntoLiteralList: !Select [1, ["a", "b", "c"]]
+      SelectStaticIntoMixedList: !Select [0, [!Ref MyBucket, "b"]]
+      SelectOutOfBounds: !Select [5, ["a", "b"]]
+      SelectDynamicIndex: !Select [!Ref EnvName, ["a", "b"]]
+      PlainNestedObject:
+        Foo: bar
+        Baz: 3
+      PlainList:
+        - x
+        - y
+      IntegrationJoinOfRefAndGetAtt: !Join ["-", [!Ref MyBucket, !GetAtt MyBucket.Arn]]

@@ -26,3 +26,21 @@ export interface AstEntry {
   /** The parsed value for this key. */
   value: AstNode;
 }
+
+/**
+ * Everything `parser/intrinsics.ts` needs from a template to resolve `Ref`,
+ * `Fn::GetAtt`, `Fn::Join`, and `Fn::Select` — built once per template via
+ * `buildResolutionContext()` and passed to every `resolveValue()` call.
+ */
+export interface ResolutionContext {
+  /** Parameter name -> its `Default` AstNode, or `undefined` if it has none. */
+  parameters: Map<string, AstNode | undefined>;
+  /** Logical IDs of every declared `Resources` entry, for `Ref`/`Fn::GetAtt` existence checks. */
+  resources: Set<string>;
+  /**
+   * Mapping name -> its definition AstNode. Not consumed by `Ref`/`GetAtt`/
+   * `Join`/`Select` themselves — stored here so `Fn::FindInMap` (Ticket 1.3)
+   * can reuse the same context without a second AST walk.
+   */
+  mappings: Map<string, AstNode>;
+}
