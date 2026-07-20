@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
-import { loadTemplate } from '../loader.js';
+import { loadTemplate, loadTemplates } from '../loader.js';
 import type { AstNode } from '../../common/types.js';
 
 const FIXTURES = new URL('./__fixtures__/', import.meta.url);
@@ -145,5 +145,54 @@ describe('loadTemplate', () => {
     if (properties?.value.kind !== 'object') throw new Error('expected Properties to be an object');
     const cidrBlock = properties.value.entries.find((entry) => entry.key === 'CidrBlock');
     expect(toPlainValue(cidrBlock!.value)).toEqual({ 'Fn::FindInMap': ['SubnetConfig', 'VPC', 'CIDR'] });
+  });
+});
+
+describe('loadTemplates (Ticket 1.6: skip-and-warn across multiple files)', () => {
+  test('loads every file successfully when none are malformed', () => {
+    const result = loadTemplates([examplePath('01-simple-lambda/template.yaml'), examplePath('02-complex-vpc-nat/template.yaml')]);
+
+    expect(result.templates).toHaveLength(2);
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  test('a file with invalid YAML syntax is skipped with a warning, not thrown as a fatal error', () => {
+    const path = examplePath('05-malformed-and-missing-ref/invalid-yaml.yaml');
+
+    const result = loadTemplates([path]);
+
+    expect(result.templates).toHaveLength(0);
+    expect(result.warnings).toEqual([{ file: path, message: expect.stringContaining('Failed to parse YAML') }]);
+  });
+
+  test('a file with valid YAML but a dangling Fn::GetAtt reference still loads successfully — not a load-time failure', () => {
+    const path = examplePath('05-malformed-and-missing-ref/missing-resource-ref.yaml');
+
+    const result = loadTemplates([path]);
+
+    expect(result.templates).toHaveLength(1);
+    expect(result.templates[0]?.file).toBe(path);
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  test('one malformed file among several valid ones is warned, not silently dropped or fatal — the rest still load', () => {
+    const validFile1 = examplePath('01-simple-lambda/template.yaml');
+    const validFile2 = examplePath('02-complex-vpc-nat/template.yaml');
+    const malformedFile = examplePath('05-malformed-and-missing-ref/invalid-yaml.yaml');
+    const danglingRefFile = examplePath('05-malformed-and-missing-ref/missing-resource-ref.yaml');
+
+    const result = loadTemplates([validFile1, malformedFile, danglingRefFile, validFile2]);
+
+    // The three loadable files (including the dangling-reference one) all
+    // produce output, and in the order they were given — a caller
+    // shouldn't have to guess which files failed from ordering alone.
+    expect(result.templates.map((t) => t.file)).toEqual([validFile1, danglingRefFile, validFile2]);
+    expect(result.templates.every((t) => t.ast.kind === 'object')).toBe(true);
+
+    // The malformed file is warned about specifically, with a message that
+    // would actually help someone fix it — not a generic "failed" string.
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]?.file).toBe(malformedFile);
+    expect(result.warnings[0]?.message).toContain('Failed to parse YAML');
   });
 });

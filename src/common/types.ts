@@ -37,4 +37,34 @@ export type ResolvedValue =
   | { kind: 'parameterRef'; name: string }
   /** `Ref` to an `AWS::*` pseudo parameter (e.g. `AWS::Region`) — always deploy-time-unknown. */
   | { kind: 'pseudoParameterRef'; name: string }
+  /**
+   * `Fn::ImportValue`, tagged but not resolved — resolving it means matching
+   * `exportName` against another template's `Outputs.*.Export.Name`, which
+   * requires the multi-stack merge Sprint 2 builds. `exportName` is itself
+   * fully resolved here (e.g. a `Fn::Join` collapsed to a literal string),
+   * so Sprint 2 can match it directly without re-walking the AST.
+   */
+  | { kind: 'importValueRef'; exportName: ResolvedValue }
   | { kind: 'unresolved'; reason: string };
+
+/**
+ * The three-valued (true/false/unknown) result of evaluating one named
+ * `Conditions` block entry, produced by `parser/conditions.ts`.
+ *
+ * Deliberately not a plain boolean: a condition that depends on a parameter
+ * with no `Default` (or any other deploy-time-only value) is genuinely
+ * undeterminable from the template alone, and per this project's
+ * graceful-degradation stance (PO Question 1), that must stay visibly
+ * `unknown` rather than being guessed as `true` or `false`.
+ */
+export type ConditionValue = { kind: 'true' } | { kind: 'false' } | { kind: 'unknown'; reason: string };
+
+/**
+ * Whether a resource is actually created, given its (optional) `Condition`
+ * attribute and the evaluated `Conditions` block. A resource with no
+ * `Condition` attribute is always `included`. `unknown` is PO Question 1's
+ * "distinct unknown/conditional" outcome — the resource's condition
+ * couldn't be statically resolved, so it must be flagged, never silently
+ * included or omitted.
+ */
+export type ResourceInclusion = { kind: 'included' } | { kind: 'excluded' } | { kind: 'unknown'; reason: string };

@@ -5,6 +5,16 @@ Parameters:
     Type: String
     Default: t2.micro
 
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-111
+    us-west-2:
+      AMI: ami-222
+      CidrList:
+        - 10.0.0.0/16
+        - 10.1.0.0/16
+
 Resources:
   MyBucket:
     Type: AWS::S3::Bucket
@@ -36,3 +46,23 @@ Resources:
         - x
         - y
       IntegrationJoinOfRefAndGetAtt: !Join ["-", [!Ref MyBucket, !GetAtt MyBucket.Arn]]
+      SubLiteralOnly: !Sub "plain text, no placeholders"
+      SubWithImplicitRef: !Sub "bucket is ${MyBucket}"
+      SubWithImplicitGetAtt: !Sub "arn is ${MyBucket.Arn}"
+      SubWithParamDefaultCollapses: !Sub "type is ${InstanceType}"
+      SubWithTwoEmbeddedRefs: !Sub "${InstanceType}-${EnvName}"
+      SubWithEscapedLiteral: !Sub "literal ${!NotAVar} end"
+      SubWithSubstitutionMap: !Sub
+        - "value is ${CustomVar}"
+        - CustomVar: !GetAtt MyBucket.Arn
+      FindInMapStatic: !FindInMap [RegionMap, us-east-1, AMI]
+      FindInMapDynamicTopKey: !FindInMap [RegionMap, !Ref AWS::Region, AMI]
+      FindInMapUndeclaredMap: !FindInMap [NoSuchMap, us-east-1, AMI]
+      FindInMapMissingTopKey: !FindInMap [RegionMap, eu-west-1, AMI]
+      FindInMapMissingSecondKey: !FindInMap [RegionMap, us-east-1, CidrList]
+      FindInMapListValue: !FindInMap [RegionMap, us-west-2, CidrList]
+      ImportValueLiteral: !ImportValue SomeExportName
+      ImportValueJoinExpr: !ImportValue
+        Fn::Join: [":", [!Ref InstanceType, "suffix"]]
+      ImportValueNonStaticExpr: !ImportValue
+        Fn::Join: [":", [!Ref EnvName, "suffix"]]

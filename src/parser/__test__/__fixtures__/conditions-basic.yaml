@@ -1,0 +1,49 @@
+Parameters:
+  EnvName:
+    Type: String
+    Default: prod
+  RuntimeOnlyParam:
+    Type: String
+
+Conditions:
+  IsProd: !Equals [!Ref EnvName, "prod"]
+  IsDev: !Equals [!Ref EnvName, "dev"]
+  IsUnknown: !Equals [!Ref RuntimeOnlyParam, "x"]
+  NotProd: !Not [!Condition IsProd]
+  ProdAndDev: !And [!Condition IsProd, !Condition IsDev]
+  # 3-valued-logic correctness: AND with one definitively-false operand is
+  # false regardless of the other operand being unknown, not "unknown".
+  UnknownAndDev: !And [!Condition IsUnknown, !Condition IsDev]
+  # Same for OR: one definitively-true operand makes it true regardless of
+  # an unknown operand.
+  ProdOrUnknown: !Or [!Condition IsProd, !Condition IsUnknown]
+  # Neither operand is definitive here, so this one genuinely IS unknown.
+  DevOrUnknown: !Or [!Condition IsDev, !Condition IsUnknown]
+
+Resources:
+  UnconditionalBucket:
+    Type: AWS::S3::Bucket
+
+  ProdOnlyBucket:
+    Type: AWS::S3::Bucket
+    Condition: IsProd
+
+  DevOnlyBucket:
+    Type: AWS::S3::Bucket
+    Condition: IsDev
+
+  UnknownGatedBucket:
+    Type: AWS::S3::Bucket
+    Condition: IsUnknown
+
+  UndefinedConditionBucket:
+    Type: AWS::S3::Bucket
+    Condition: NoSuchCondition
+
+  IfConsumer:
+    Type: AWS::Custom::Thing
+    Properties:
+      ValueIfProdTrue: !If [IsProd, "prod-value", "not-prod-value"]
+      ValueIfDevFalse: !If [IsDev, "dev-value", "not-dev-value"]
+      ValueIfUnknown: !If [IsUnknown, "unknown-true-value", "unknown-false-value"]
+      ValueIfUndefinedCondition: !If [NoSuchCondition, "a", "b"]

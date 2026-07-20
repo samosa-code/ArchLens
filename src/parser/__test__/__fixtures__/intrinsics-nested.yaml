@@ -1,0 +1,43 @@
+Parameters:
+  EnvName:
+    Type: String
+  InstanceType:
+    Type: String
+    Default: t2.micro
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-111
+
+Resources:
+  MyBucket:
+    Type: AWS::S3::Bucket
+
+  Consumer:
+    Type: AWS::Custom::Thing
+    Properties:
+      # 4 levels: Select > (single-item list) > Join > [FindInMap, GetAtt]
+      # Join can't fully collapse (GetAtt isn't a literal), so Select's pick
+      # surfaces that partial Join result rather than a plain string.
+      SelectOfJoinOfFindInMapAndGetAtt: !Select
+        - 0
+        - - !Join
+            - "-"
+            - - !FindInMap [RegionMap, us-east-1, AMI]
+              - !GetAtt MyBucket.Arn
+
+      # 3 levels: Sub > Join > [FindInMap, Ref-with-Default]. Every leaf is
+      # statically literal, so this should collapse all the way down to one
+      # plain string, not just the outermost Sub.
+      SubOfJoinOfFindInMapAndRef: !Sub
+        - "result: ${Nested}"
+        - Nested: !Join ["-", [!FindInMap [RegionMap, us-east-1, AMI], !Ref InstanceType]]
+
+      # Fn::Base64 has no resolver of its own (not in scope for any Sprint 1
+      # ticket) — this checks that its nested Fn::Sub (with an implicit
+      # dotted-GetAtt placeholder) still resolves correctly through the
+      # generic recursive passthrough, rather than the whole subtree
+      # silently giving up because the outer function is unrecognized.
+      Base64WrappingSubWithGetAtt:
+        Fn::Base64: !Sub "arn-${MyBucket.Arn}"

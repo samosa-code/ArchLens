@@ -3,7 +3,7 @@ import { isMap, isScalar, isSeq, parseDocument } from 'yaml';
 import type { Node as YamlNode } from 'yaml';
 import { parseTree, printParseErrorCode } from 'jsonc-parser';
 import type { Node as JsonNode, ParseError } from 'jsonc-parser';
-import type { AstEntry, SourcePosition } from '../common/interfaces.js';
+import type { AstEntry, LoadTemplatesResult, SourcePosition } from '../common/interfaces.js';
 import type { AstNode } from '../common/types.js';
 import { splitGetAttShorthand } from './getAttShorthand.js';
 
@@ -209,4 +209,28 @@ function loadJson(source: string, file: string): AstNode {
 export function loadTemplate(filePath: string): AstNode {
   const source = readFileSync(filePath, 'utf8');
   return filePath.endsWith('.json') ? loadJson(source, filePath) : loadYaml(source, filePath);
+}
+
+/**
+ * Loads several templates, skipping and warning about any that fail rather
+ * than aborting the whole run (PO Question 3) — this function itself never
+ * throws. A file with valid syntax but semantically-broken content (e.g. a
+ * `Fn::GetAtt` to an undeclared resource) is *not* a load failure here; it
+ * loads successfully and shows up later as `unresolved` when
+ * `intrinsics.ts` resolves that specific property — this function only
+ * concerns itself with whether a file could be parsed at all.
+ */
+export function loadTemplates(filePaths: string[]): LoadTemplatesResult {
+  const templates: LoadTemplatesResult['templates'] = [];
+  const warnings: LoadTemplatesResult['warnings'] = [];
+
+  for (const file of filePaths) {
+    try {
+      templates.push({ file, ast: loadTemplate(file) });
+    } catch (error) {
+      warnings.push({ file, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return { templates, warnings };
 }

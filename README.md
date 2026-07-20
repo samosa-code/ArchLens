@@ -38,11 +38,21 @@ view it, no AWS credentials required. Static analysis only.
 
 ## Status
 
-📋 **Planning stage — no code yet.** The project is currently scoped as a
-PRD and sprint/ticket plan (see `internal-docs/`, kept local/untracked for
-now). Implementation follows the build order: parser → graph model →
-render → search → blast radius → export → security/cost flags → diff → CI
-integration → polish.
+✅ **Sprint 1 (parser) is complete.** Scoped from a PRD and sprint/ticket
+plan (see `internal-docs/`, kept local/untracked for now). Implementation
+follows the build order: parser → graph model → render → search → blast
+radius → export → security/cost flags → diff → CI integration → polish —
+Sprint 2 (graph model) is next.
+
+Delivered: YAML/JSON loading with source positions and skip-and-warn
+multi-file handling, full intrinsic-function resolution (`Ref`,
+`Fn::GetAtt`, `Fn::Join`, `Fn::Select`, `Fn::Sub`, `Fn::FindInMap`,
+`Fn::ImportValue` (stub), `Fn::If`) with arbitrary nesting depth, and
+`Conditions`-block evaluation. See
+[`docs/parser-architecture.md`](docs/parser-architecture.md) for the
+pipeline end to end, [`docs/developer-guide.md`](docs/developer-guide.md)
+for the project-wide doc index, and [`LIMITATIONS.md`](LIMITATIONS.md) for
+what's deliberately not supported yet.
 
 ## Non-goals (for now)
 
@@ -51,6 +61,31 @@ integration → polish.
 - Terraform / other IaC formats.
 - Live AWS API integration or drift detection.
 - Editing templates from the UI — read-only, by design.
+
+## Troubleshooting
+
+### What happens with invalid input
+
+Loading multiple templates never aborts the whole run over one bad file —
+each file is loaded independently, and a file that can't be parsed is
+**skipped with a warning**, not silently dropped and not treated as fatal.
+Every other file still loads and is included in the result.
+
+This applies to genuine parse failures:
+
+- Invalid YAML syntax (e.g. a tab character used for indentation, which
+  YAML's spec disallows).
+- Invalid JSON (CloudFormation's JSON format is strict — no trailing
+  commas, no comments — unlike some JSON-with-comments tools you may have
+  used).
+
+It does **not** apply to a template that parses fine but references
+something that doesn't exist — e.g. a `Fn::GetAtt` pointing at an
+undeclared resource. That's not a load failure: the file loads normally,
+and the specific broken reference resolves to an explicit "unresolved"
+result (with a reason) wherever it's used, rather than crashing or being
+silently guessed. See [`LIMITATIONS.md`](LIMITATIONS.md) for the full list
+of what's flagged this way versus what's out of scope entirely.
 
 ## License
 

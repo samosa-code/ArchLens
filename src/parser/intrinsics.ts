@@ -3,7 +3,7 @@ import type { ResolutionContext } from '../common/interfaces.js';
 import { splitGetAttShorthand } from './getAttShorthand.js';
 
 /** Returns the entry value for `key` on an object-kind node, or `undefined` if absent/not an object. */
-function findEntry(node: AstNode, key: string): AstNode | undefined {
+export function findEntry(node: AstNode, key: string): AstNode | undefined {
   if (node.kind !== 'object') return undefined;
   return node.entries.find((entry) => entry.key === key)?.value;
 }
@@ -34,7 +34,7 @@ export function buildResolutionContext(template: AstNode): ResolutionContext {
     }
   }
 
-  return { parameters, resources, mappings };
+  return { parameters, resources, mappings, conditions: new Map() };
 }
 
 /** Resolves a `Ref` target name against Parameters, Resources, and AWS pseudo parameters. */
@@ -53,38 +53,44 @@ function resolveRef(name: string, context: ResolutionContext): ResolvedValue {
 }
 
 /**
+ * Resolves a `logicalId`/`attribute` pair (already split, from whichever
+ * `Fn::GetAtt` syntax produced them) to an `attributeRef`, or `unresolved`
+ * if the resource isn't declared. Shared by {@link resolveGetAtt} and
+ * `Fn::Sub`'s implicit-`GetAtt` handling (`${Resource.Attr}`), so both
+ * agree on exactly what makes a `GetAtt` resolvable.
+ */
+function attributeRefOrUnresolved(logicalId: string, attribute: string, context: ResolutionContext): ResolvedValue {
+  if (!context.resources.has(logicalId)) {
+    return { kind: 'unresolved', reason: `Fn::GetAtt to undeclared resource "${logicalId}"` };
+  }
+  return { kind: 'attributeRef', logicalId, attribute };
+}
+
+/**
  * Resolves a `Fn::GetAtt` argument, which may be either the 2-element array
  * form (`[logicalId, attribute]`) or the dotted-string form
  * (`"logicalId.attribute"`, valid CFN long-form syntax independent of the
  * `!GetAtt` YAML tag shorthand `loader.ts` already normalizes).
  */
 function resolveGetAtt(valueNode: AstNode, context: ResolutionContext): ResolvedValue {
-  let logicalId: string;
-  let attribute: string;
-
   if (
     valueNode.kind === 'array' &&
     valueNode.items.length === 2 &&
     valueNode.items[0]!.kind === 'scalar' &&
     valueNode.items[1]!.kind === 'scalar'
   ) {
-    logicalId = String(valueNode.items[0]!.value);
-    attribute = String(valueNode.items[1]!.value);
-  } else if (valueNode.kind === 'scalar') {
+    return attributeRefOrUnresolved(String(valueNode.items[0]!.value), String(valueNode.items[1]!.value), context);
+  }
+
+  if (valueNode.kind === 'scalar') {
     const parts = splitGetAttShorthand(String(valueNode.value));
     if (parts.length < 2) {
       return { kind: 'unresolved', reason: `Fn::GetAtt malformed: "${String(valueNode.value)}" has no attribute` };
     }
-    [logicalId, attribute] = parts as [string, string];
-  } else {
-    return { kind: 'unresolved', reason: 'Fn::GetAtt has an unrecognized argument shape' };
+    return attributeRefOrUnresolved(parts[0]!, parts[1]!, context);
   }
 
-  if (!context.resources.has(logicalId)) {
-    return { kind: 'unresolved', reason: `Fn::GetAtt to undeclared resource "${logicalId}"` };
-  }
-
-  return { kind: 'attributeRef', logicalId, attribute };
+  return { kind: 'unresolved', reason: 'Fn::GetAtt has an unrecognized argument shape' };
 }
 
 /** Narrows a {@link ResolvedValue} to its scalar variant. */
@@ -162,10 +168,194 @@ function resolveSelect(argsNode: AstNode, context: ResolutionContext): ResolvedV
   return resolveValue(selected, context);
 }
 
+/** Matches a `${...}` placeholder in a `Fn::Sub` template string. */
+const SUB_PLACEHOLDER = /\$\{([^}]*)\}/g;
+
+/**
+ * Resolves one `${...}` placeholder body (already trimmed, `!`-escape
+ * already handled by the caller) against the explicit substitution map
+ * (long-form `Fn::Sub`, if any) and, failing that, as an implicit `Ref` or
+ * `Fn::GetAtt` — `${Name}` means `Ref: Name`, `${Resource.Attr}` means
+ * `Fn::GetAtt: [Resource, Attr]`, per CFN's `Fn::Sub` semantics.
+ */
+function resolveSubVariable(name: string, substitutions: Map<string, AstNode> | undefined, context: ResolutionContext): ResolvedValue {
+  const explicit = substitutions?.get(name);
+  if (explicit !== undefined) {
+    return resolveValue(explicit, context);
+  }
+  const dot = name.indexOf('.');
+  if (dot !== -1) {
+    return attributeRefOrUnresolved(name.slice(0, dot), name.slice(dot + 1), context);
+  }
+  return resolveRef(name, context);
+}
+
+/**
+ * Resolves `Fn::Sub`'s template string, either the short form (a bare
+ * string) or the long form (`[templateString, { Name: value, ... }]`).
+ *
+ * Splits the template into literal-text and resolved-placeholder segments.
+ * If every segment ends up a literal scalar, collapses to one computed
+ * string. Otherwise falls back to a `list` of the segments in order — same
+ * "keep references visible rather than giving up" approach as
+ * {@link resolveJoin} uses for its non-static parts.
+ */
+function resolveSub(argsNode: AstNode, context: ResolutionContext): ResolvedValue {
+  let templateNode: AstNode;
+  let substitutions: Map<string, AstNode> | undefined;
+
+  if (argsNode.kind === 'scalar') {
+    templateNode = argsNode;
+  } else if (argsNode.kind === 'array' && argsNode.items.length === 2 && argsNode.items[1]!.kind === 'object') {
+    templateNode = argsNode.items[0]!;
+    substitutions = new Map(argsNode.items[1]!.entries.map(({ key, value }) => [key, value]));
+  } else {
+    return { kind: 'unresolved', reason: 'Fn::Sub arguments must be a string or [string, {substitutions}]' };
+  }
+
+  if (templateNode.kind !== 'scalar' || typeof templateNode.value !== 'string') {
+    return { kind: 'unresolved', reason: 'Fn::Sub template must be a literal string' };
+  }
+  const template = templateNode.value;
+
+  const segments: ResolvedValue[] = [];
+  let lastIndex = 0;
+  for (const match of template.matchAll(SUB_PLACEHOLDER)) {
+    const literalBefore = template.slice(lastIndex, match.index);
+    if (literalBefore.length > 0) {
+      segments.push({ kind: 'scalar', value: literalBefore });
+    }
+
+    const body = match[1]!.trim();
+    if (body.startsWith('!')) {
+      segments.push({ kind: 'scalar', value: `\${${body.slice(1)}}` });
+    } else {
+      segments.push(resolveSubVariable(body, substitutions, context));
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  const literalAfter = template.slice(lastIndex);
+  if (literalAfter.length > 0 || segments.length === 0) {
+    segments.push({ kind: 'scalar', value: literalAfter });
+  }
+
+  if (segments.every(isScalarResolved)) {
+    return { kind: 'scalar', value: segments.map((segment) => scalarToJoinString(segment.value)).join('') };
+  }
+  return { kind: 'list', items: segments };
+}
+
+/** Resolves a node to a literal string, or `undefined` if it isn't statically one. */
+function resolveToLiteralString(node: AstNode, context: ResolutionContext): string | undefined {
+  const resolved = resolveValue(node, context);
+  return resolved.kind === 'scalar' && typeof resolved.value === 'string' ? resolved.value : undefined;
+}
+
+/**
+ * Resolves `Fn::FindInMap`'s `[mapName, topLevelKey, secondLevelKey]`
+ * arguments against {@link ResolutionContext.mappings}. All three arguments
+ * must resolve to literal strings — `Mappings` lookups are keyed by exact
+ * string match, so a dynamic key (e.g. `!Ref AWS::Region`, a very common
+ * real-world pattern) can't be looked up statically and resolves to
+ * `unresolved` rather than guessed.
+ */
+function resolveFindInMap(argsNode: AstNode, context: ResolutionContext): ResolvedValue {
+  if (argsNode.kind !== 'array' || argsNode.items.length !== 3) {
+    return { kind: 'unresolved', reason: 'Fn::FindInMap arguments must be [mapName, topLevelKey, secondLevelKey]' };
+  }
+
+  const mapName = resolveToLiteralString(argsNode.items[0]!, context);
+  if (mapName === undefined) {
+    return { kind: 'unresolved', reason: 'Fn::FindInMap map name is not statically determinable' };
+  }
+
+  const mapNode = context.mappings.get(mapName);
+  if (mapNode === undefined || mapNode.kind !== 'object') {
+    return { kind: 'unresolved', reason: `Fn::FindInMap references undeclared mapping "${mapName}"` };
+  }
+
+  const topLevelKey = resolveToLiteralString(argsNode.items[1]!, context);
+  if (topLevelKey === undefined) {
+    return { kind: 'unresolved', reason: 'Fn::FindInMap top-level key is not statically determinable' };
+  }
+
+  const topEntry = mapNode.entries.find((entry) => entry.key === topLevelKey);
+  if (topEntry === undefined || topEntry.value.kind !== 'object') {
+    return { kind: 'unresolved', reason: `Fn::FindInMap top-level key "${topLevelKey}" not found in mapping "${mapName}"` };
+  }
+
+  const secondLevelKey = resolveToLiteralString(argsNode.items[2]!, context);
+  if (secondLevelKey === undefined) {
+    return { kind: 'unresolved', reason: 'Fn::FindInMap second-level key is not statically determinable' };
+  }
+
+  const secondEntry = topEntry.value.entries.find((entry) => entry.key === secondLevelKey);
+  if (secondEntry === undefined) {
+    return {
+      kind: 'unresolved',
+      reason: `Fn::FindInMap second-level key "${secondLevelKey}" not found under "${topLevelKey}" in mapping "${mapName}"`,
+    };
+  }
+
+  return resolveValue(secondEntry.value, context);
+}
+
+/**
+ * Resolves `Fn::ImportValue`'s export-name argument and wraps it as an
+ * `importValueRef` — tagged, not resolved. Actually matching it against
+ * another template's `Export.Name` requires the multi-stack merge Sprint 2
+ * builds; this ticket's job is only to resolve the export-name expression
+ * itself as far as possible (e.g. collapse a `Fn::Join` to a literal
+ * string) so Sprint 2 has a ready-to-match value instead of raw AST.
+ */
+function resolveImportValue(argsNode: AstNode, context: ResolutionContext): ResolvedValue {
+  return { kind: 'importValueRef', exportName: resolveValue(argsNode, context) };
+}
+
+/**
+ * Resolves `Fn::If`'s `[conditionName, valueIfTrue, valueIfFalse]`
+ * arguments by looking up `conditionName` in `context.conditions` (see
+ * `parser/conditions.ts`'s `evaluateConditions()` — `resolveValue()` itself
+ * never evaluates a condition, only reads an already-evaluated one) and
+ * resolving whichever branch it points to. If the condition isn't
+ * statically true or false, resolves to `unresolved` rather than guessing
+ * a branch — the same "never silently guessed" stance as `Ref`/`Fn::GetAtt`
+ * apply to undefined names.
+ */
+function resolveIf(argsNode: AstNode, context: ResolutionContext): ResolvedValue {
+  if (argsNode.kind !== 'array' || argsNode.items.length !== 3) {
+    return { kind: 'unresolved', reason: 'Fn::If arguments must be [conditionName, valueIfTrue, valueIfFalse]' };
+  }
+
+  const conditionNameNode = argsNode.items[0]!;
+  if (conditionNameNode.kind !== 'scalar' || typeof conditionNameNode.value !== 'string') {
+    return { kind: 'unresolved', reason: 'Fn::If condition name must be a literal string' };
+  }
+
+  const conditionResult = context.conditions.get(conditionNameNode.value);
+  if (conditionResult === undefined) {
+    return { kind: 'unresolved', reason: `Fn::If references undefined condition "${conditionNameNode.value}"` };
+  }
+  if (conditionResult.kind === 'true') {
+    return resolveValue(argsNode.items[1]!, context);
+  }
+  if (conditionResult.kind === 'false') {
+    return resolveValue(argsNode.items[2]!, context);
+  }
+  return { kind: 'unresolved', reason: `Fn::If condition "${conditionNameNode.value}" is not statically determinable` };
+}
+
 /**
  * Resolves a single property value node against a {@link ResolutionContext},
- * substituting `Ref`, `Fn::GetAtt`, `Fn::Join`, and `Fn::Select` calls with
- * their resolved value where statically determinable.
+ * substituting `Ref`, `Fn::GetAtt`, `Fn::Join`, `Fn::Select`, `Fn::Sub`,
+ * `Fn::FindInMap`, `Fn::ImportValue`, and `Fn::If` calls with their resolved
+ * value where statically determinable. `Fn::If` reads `context.conditions`
+ * rather than evaluating anything itself — see `parser/conditions.ts`.
+ * Anything else (plain scalars/arrays/objects, or an intrinsic not yet
+ * implemented, e.g. `Fn::Base64`) passes through structurally unchanged,
+ * recursing into any nested intrinsics it contains.
  */
 export function resolveValue(node: AstNode, context: ResolutionContext): ResolvedValue {
   if (node.kind === 'object' && node.entries.length === 1) {
@@ -182,6 +372,18 @@ export function resolveValue(node: AstNode, context: ResolutionContext): Resolve
     }
     if (key === 'Fn::Select') {
       return resolveSelect(value, context);
+    }
+    if (key === 'Fn::Sub') {
+      return resolveSub(value, context);
+    }
+    if (key === 'Fn::FindInMap') {
+      return resolveFindInMap(value, context);
+    }
+    if (key === 'Fn::ImportValue') {
+      return resolveImportValue(value, context);
+    }
+    if (key === 'Fn::If') {
+      return resolveIf(value, context);
     }
   }
 

@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, test, beforeAll } from 'vitest';
 import { loadTemplate } from '../loader.js';
 import { buildResolutionContext, resolveValue } from '../intrinsics.js';
+import { getEntry, getPath } from './astTestHelpers.js';
 import type { AstNode } from '../../common/types.js';
 import type { ResolutionContext } from '../../common/interfaces.js';
 
@@ -14,17 +15,6 @@ function fixturePath(name: string): string {
 
 function examplePath(name: string): string {
   return fileURLToPath(new URL(name, REAL_WORLD_EXAMPLES));
-}
-
-function getEntry(node: AstNode, key: string): AstNode {
-  if (node.kind !== 'object') throw new Error(`expected object node looking for key "${key}"`);
-  const entry = node.entries.find((e) => e.key === key);
-  if (!entry) throw new Error(`missing key "${key}"`);
-  return entry.value;
-}
-
-function getPath(node: AstNode, ...keys: string[]): AstNode {
-  return keys.reduce(getEntry, node);
 }
 
 describe('resolveValue', () => {
@@ -137,6 +127,134 @@ describe('resolveValue', () => {
     });
   });
 
+  describe('Fn::Sub', () => {
+    test('with no placeholders resolves to the literal string unchanged', () => {
+      const result = resolveValue(consumerProp('SubLiteralOnly'), context);
+      expect(result).toEqual({ kind: 'scalar', value: 'plain text, no placeholders' });
+    });
+
+    test('with an implicit Ref placeholder to a resource does not collapse, keeping the reference visible', () => {
+      const result = resolveValue(consumerProp('SubWithImplicitRef'), context);
+      expect(result).toEqual({
+        kind: 'list',
+        items: [{ kind: 'scalar', value: 'bucket is ' }, { kind: 'resourceRef', logicalId: 'MyBucket' }],
+      });
+    });
+
+    test('with an implicit Fn::GetAtt placeholder (dotted) does not collapse, keeping the reference visible', () => {
+      const result = resolveValue(consumerProp('SubWithImplicitGetAtt'), context);
+      expect(result).toEqual({
+        kind: 'list',
+        items: [{ kind: 'scalar', value: 'arn is ' }, { kind: 'attributeRef', logicalId: 'MyBucket', attribute: 'Arn' }],
+      });
+    });
+
+    test('with a placeholder resolving to a literal (parameter Default) fully collapses to one string', () => {
+      const result = resolveValue(consumerProp('SubWithParamDefaultCollapses'), context);
+      expect(result).toEqual({ kind: 'scalar', value: 'type is t2.micro' });
+    });
+
+    test('with 2+ embedded references, one literal and one not, collapses what it can and preserves the rest', () => {
+      const result = resolveValue(consumerProp('SubWithTwoEmbeddedRefs'), context);
+      expect(result).toEqual({
+        kind: 'list',
+        items: [
+          { kind: 'scalar', value: 't2.micro' },
+          { kind: 'scalar', value: '-' },
+          { kind: 'parameterRef', name: 'EnvName' },
+        ],
+      });
+    });
+
+    test('${!Name} is an escape for a literal ${Name}, not a variable reference', () => {
+      const result = resolveValue(consumerProp('SubWithEscapedLiteral'), context);
+      expect(result).toEqual({ kind: 'scalar', value: 'literal ${NotAVar} end' });
+    });
+
+    test('long form resolves placeholders against the explicit substitution map, including nested intrinsics', () => {
+      const result = resolveValue(consumerProp('SubWithSubstitutionMap'), context);
+      expect(result).toEqual({
+        kind: 'list',
+        items: [{ kind: 'scalar', value: 'value is ' }, { kind: 'attributeRef', logicalId: 'MyBucket', attribute: 'Arn' }],
+      });
+    });
+  });
+
+  describe('Fn::FindInMap', () => {
+    test('with fully static arguments resolves to the mapped literal value', () => {
+      const result = resolveValue(consumerProp('FindInMapStatic'), context);
+      expect(result).toEqual({ kind: 'scalar', value: 'ami-111' });
+    });
+
+    test('with a dynamic top-level key resolves to unresolved', () => {
+      const result = resolveValue(consumerProp('FindInMapDynamicTopKey'), context);
+      expect(result).toEqual({ kind: 'unresolved', reason: 'Fn::FindInMap top-level key is not statically determinable' });
+    });
+
+    test('referencing an undeclared mapping resolves to unresolved', () => {
+      const result = resolveValue(consumerProp('FindInMapUndeclaredMap'), context);
+      expect(result).toEqual({ kind: 'unresolved', reason: 'Fn::FindInMap references undeclared mapping "NoSuchMap"' });
+    });
+
+    test('with a missing top-level key resolves to unresolved', () => {
+      const result = resolveValue(consumerProp('FindInMapMissingTopKey'), context);
+      expect(result).toEqual({
+        kind: 'unresolved',
+        reason: 'Fn::FindInMap top-level key "eu-west-1" not found in mapping "RegionMap"',
+      });
+    });
+
+    test('with a missing second-level key resolves to unresolved', () => {
+      const result = resolveValue(consumerProp('FindInMapMissingSecondKey'), context);
+      expect(result).toEqual({
+        kind: 'unresolved',
+        reason: 'Fn::FindInMap second-level key "CidrList" not found under "us-east-1" in mapping "RegionMap"',
+      });
+    });
+
+    test('with a list-valued mapping entry resolves to a list, not just scalars', () => {
+      // QA audit gap: every other FindInMap test resolves to a scalar or
+      // to unresolved — this is the only one confirming a mapping value
+      // that's itself a YAML/JSON list (CidrList under us-west-2) comes
+      // back as a proper `list` ResolvedValue, not silently coerced or
+      // truncated to its first element.
+      const result = resolveValue(consumerProp('FindInMapListValue'), context);
+      expect(result).toEqual({
+        kind: 'list',
+        items: [{ kind: 'scalar', value: '10.0.0.0/16' }, { kind: 'scalar', value: '10.1.0.0/16' }],
+      });
+    });
+  });
+
+  describe('Fn::ImportValue', () => {
+    test('with a literal export name tags it as a pending cross-stack reference', () => {
+      const result = resolveValue(consumerProp('ImportValueLiteral'), context);
+      expect(result).toEqual({
+        kind: 'importValueRef',
+        exportName: { kind: 'scalar', value: 'SomeExportName' },
+      });
+    });
+
+    test('with a fully-static Fn::Join export name resolves the export name to one literal string', () => {
+      const result = resolveValue(consumerProp('ImportValueJoinExpr'), context);
+      expect(result).toEqual({
+        kind: 'importValueRef',
+        exportName: { kind: 'scalar', value: 't2.micro:suffix' },
+      });
+    });
+
+    test('with a non-static export name still tags it, exposing whatever did resolve', () => {
+      const result = resolveValue(consumerProp('ImportValueNonStaticExpr'), context);
+      expect(result).toEqual({
+        kind: 'importValueRef',
+        exportName: {
+          kind: 'list',
+          items: [{ kind: 'parameterRef', name: 'EnvName' }, { kind: 'scalar', value: 'suffix' }],
+        },
+      });
+    });
+  });
+
   describe('non-intrinsic structure', () => {
     test('a plain nested object passes through recursively resolved, unchanged in shape', () => {
       const result = resolveValue(consumerProp('PlainNestedObject'), context);
@@ -183,6 +301,84 @@ describe('resolveValue', () => {
       const env = getPath(props, 'Environment', 'Variables');
       expect(resolveValue(getEntry(env, 'ENV'), realContext)).toEqual({ kind: 'parameterRef', name: 'EnvName' });
       expect(resolveValue(getEntry(env, 'TZ'), realContext)).toEqual({ kind: 'scalar', value: 'UTC' });
+
+      expect(resolveValue(getEntry(props, 'FunctionName'), realContext)).toEqual({
+        kind: 'list',
+        items: [{ kind: 'scalar', value: 'lambda-function-' }, { kind: 'parameterRef', name: 'EnvName' }],
+      });
+    });
+  });
+
+  describe('real-world fixture: examples/02-complex-vpc-nat', () => {
+    test('resolves Fn::FindInMap against a real Mappings block', () => {
+      const realTemplate = loadTemplate(examplePath('02-complex-vpc-nat/template.yaml'));
+      const realContext = buildResolutionContext(realTemplate);
+      const vpcProps = getPath(realTemplate, 'Resources', 'VPC', 'Properties');
+
+      expect(resolveValue(getEntry(vpcProps, 'CidrBlock'), realContext)).toEqual({
+        kind: 'scalar',
+        value: '10.0.0.0/16',
+      });
+    });
+  });
+
+  describe('real-world fixture: examples/03-multi-stack-ecs-fargate', () => {
+    test('resolves a real Fn::ImportValue + Fn::Join export name to one literal string', () => {
+      const realTemplate = loadTemplate(examplePath('03-multi-stack-ecs-fargate/service-stack/template.yaml'));
+      const realContext = buildResolutionContext(realTemplate);
+      const taskDefProps = getPath(realTemplate, 'Resources', 'TaskDefinition', 'Properties');
+
+      expect(resolveValue(getEntry(taskDefProps, 'ExecutionRoleArn'), realContext)).toEqual({
+        kind: 'importValueRef',
+        exportName: { kind: 'scalar', value: 'production:ECSTaskExecutionRole' },
+      });
+    });
+  });
+
+  describe('QA audit: real-world fixture: examples/08-cdk-synthesized', () => {
+    // A real `cdk synth` build artifact (not hand-written CFN) — different
+    // authoring patterns than anything AWS's own sample templates use,
+    // e.g. Fn::Select whose list argument is a Ref to a parameter rather
+    // than an inline array literal.
+    let realTemplate: AstNode;
+    let realContext: ResolutionContext;
+
+    beforeAll(() => {
+      realTemplate = loadTemplate(examplePath('08-cdk-synthesized/template.json'));
+      realContext = buildResolutionContext(realTemplate);
+    });
+
+    test('Fn::Select whose list argument is a Ref (not a literal array) resolves to unresolved, not a crash or a guess', () => {
+      // Conditions.isPrincipalsEmpty: !Equals [!Select [0, !Ref Principals], ""]
+      // Principals is a CommaDelimitedList parameter with Default "" — its
+      // resolved value is a literal *scalar* string, not a list, so
+      // Fn::Select's list argument here is a {Ref: Principals} object node,
+      // not an array node, and can't be indexed into.
+      const conditions = getPath(realTemplate, 'Conditions');
+      const isPrincipalsEmptyExpr = getEntry(conditions, 'isPrincipalsEmpty');
+      const equalsArgs = getEntry(isPrincipalsEmptyExpr, 'Fn::Equals');
+      if (equalsArgs.kind !== 'array') throw new Error('expected Fn::Equals to be an array');
+      const selectNode = equalsArgs.items[0]!;
+
+      const result = resolveValue(selectNode, realContext);
+      expect(result).toEqual({
+        kind: 'unresolved',
+        reason: 'Fn::Select list argument is not statically determinable',
+      });
+    });
+
+    test('a real Fn::FindInMap + Fn::Equals chain fully collapses to a literal true', () => {
+      // Conditions.AnonymizedMetricsEnabled:
+      //   !Equals [!FindInMap [Send, AnonymousUsage, Data], "Yes"]
+      // Mappings.Send.AnonymousUsage.Data is the literal "Yes".
+      const conditions = getPath(realTemplate, 'Conditions');
+      const anonymizedMetricsExpr = getEntry(conditions, 'AnonymizedMetricsEnabled');
+      const equalsArgs = getEntry(anonymizedMetricsExpr, 'Fn::Equals');
+      if (equalsArgs.kind !== 'array') throw new Error('expected Fn::Equals to be an array');
+      const findInMapNode = equalsArgs.items[0]!;
+
+      const result = resolveValue(findInMapNode, realContext);
+      expect(result).toEqual({ kind: 'scalar', value: 'Yes' });
     });
   });
 });

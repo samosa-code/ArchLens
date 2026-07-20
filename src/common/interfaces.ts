@@ -1,4 +1,4 @@
-import type { AstNode } from './types.js';
+import type { AstNode, ConditionValue } from './types.js';
 
 /**
  * A single point in an original template source file, used for click-to-source
@@ -28,8 +28,8 @@ export interface AstEntry {
 }
 
 /**
- * Everything `parser/intrinsics.ts` needs from a template to resolve `Ref`,
- * `Fn::GetAtt`, `Fn::Join`, and `Fn::Select` — built once per template via
+ * Everything `parser/intrinsics.ts` needs from a template to resolve its
+ * supported intrinsic functions — built once per template via
  * `buildResolutionContext()` and passed to every `resolveValue()` call.
  */
 export interface ResolutionContext {
@@ -37,10 +37,42 @@ export interface ResolutionContext {
   parameters: Map<string, AstNode | undefined>;
   /** Logical IDs of every declared `Resources` entry, for `Ref`/`Fn::GetAtt` existence checks. */
   resources: Set<string>;
-  /**
-   * Mapping name -> its definition AstNode. Not consumed by `Ref`/`GetAtt`/
-   * `Join`/`Select` themselves — stored here so `Fn::FindInMap` (Ticket 1.3)
-   * can reuse the same context without a second AST walk.
-   */
+  /** Mapping name -> its definition AstNode, consumed by `Fn::FindInMap`. */
   mappings: Map<string, AstNode>;
+  /**
+   * Named `Conditions` block entry -> its evaluated {@link ConditionValue},
+   * consumed by `Fn::If`. Empty by default from `buildResolutionContext()` —
+   * callers that need `Fn::If` to actually resolve must separately run
+   * `parser/conditions.ts`'s `evaluateConditions()` and merge the result in,
+   * since evaluating conditions itself needs `resolveValue()` (for
+   * `Fn::Equals` operands), and this module can't import that one without a
+   * circular dependency.
+   */
+  conditions: Map<string, ConditionValue>;
+}
+
+/** One successfully-loaded template, from `parser/loader.ts`'s `loadTemplates()`. */
+export interface LoadedTemplate {
+  /** Absolute path of the source file. */
+  file: string;
+  /** Its parsed AST. */
+  ast: AstNode;
+}
+
+/**
+ * One file `loadTemplates()` couldn't load, paired with the human-readable
+ * reason (the underlying `loadTemplate()` error message) — per PO Question 3
+ * (skip-and-warn), this is surfaced, not silently dropped.
+ */
+export interface TemplateLoadWarning {
+  /** Absolute path of the file that failed to load. */
+  file: string;
+  /** Why it failed — the underlying parse error's message. */
+  message: string;
+}
+
+/** The result of `loadTemplates()`: whatever loaded successfully, plus a warning per file that didn't. */
+export interface LoadTemplatesResult {
+  templates: LoadedTemplate[];
+  warnings: TemplateLoadWarning[];
 }
