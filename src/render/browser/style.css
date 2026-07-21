@@ -1,0 +1,52 @@
+:root {
+  --archlens-primary-light: #d4825e;
+  --archlens-primary: #c15f3c;
+  --archlens-primary-dark: #9a4a2e;
+
+  --archlens-secondary-light: #cac7be;
+  --archlens-secondary: #b1ada1;
+  --archlens-secondary-dark: #8e8a80;
+
+  --archlens-accent-light: #f2b594;
+  --archlens-accent: #e8956a;
+  --archlens-accent-dark: #c47040;
+
+  --archlens-background: #f4f3ee;
+  --archlens-text-primary: #2e2a24;
+  --archlens-text-secondary: #7a756c;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--archlens-background);
+}
+
+/*
+ * Node fill stays a clean, near-white card rather than the brand color —
+ * deliberate, not an oversight: later sprints give color real *meaning*
+ * here (category clustering, security/cost flags, diff status), so the
+ * base state needs to stay quiet enough for that signal to read clearly
+ * against it. The brand color instead marks "this is a resource" via the
+ * border, consistently, everywhere.
+ */
+.archlens-node rect {
+  fill: #ffffff;
+  stroke: var(--archlens-primary);
+  stroke-width: 2;
+}
+
+.archlens-node:hover rect {
+  stroke: var(--archlens-accent-dark);
+  fill: var(--archlens-accent-light);
+}
+
+.archlens-node text {
+  font-size: 12px;
+  fill: var(--archlens-text-primary);
+}
+
+.archlens-edge {
+  stroke: var(--archlens-secondary-dark);
+  stroke-width: 1.5;
+}

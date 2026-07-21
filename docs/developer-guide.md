@@ -115,7 +115,57 @@ hardcoding them.
 **Related:** [README: "How multi-stack merging works"](../README.md) ·
 [`LIMITATIONS.md`](../LIMITATIONS.md)
 
+## HTML bundle scaffolding (Sprint 3, Ticket 3.1)
+
+Turns a graph into one self-contained `index.html`: `esbuild` bundles the
+browser-side renderer with the graph data baked in as a literal (not
+fetched), then a small inline step embeds the bundle and its CSS into an
+HTML template. Zero network requests once opened — verified with a real
+headless browser (`playwright`), not just by inspecting the output text.
+Introduced this project's first Node/browser TypeScript split
+(`tsconfig.json` vs `tsconfig.browser.json`).
+
+**Modules:** `src/render/build.ts`, `src/render/types.ts`,
+`src/render/browser/` (`app.ts`, `template.html`, `style.css`),
+`src/render/demo.ts`
+
+**Full detail:** [`docs/render-architecture.md`](render-architecture.md) —
+the bundle/inline pipeline, why the graph data can't be a separate fetched
+file, and the real TypeScript-`exclude` gotcha this ticket surfaced.
+
+**Related:** [ADR 0005](adr/0005-render-bundling-and-browser-test-tooling.md)
+(bundler + browser-test-tooling choices)
+
+## Graph layout, pan/zoom & basic SVG rendering (Sprint 3, Ticket 3.2)
+
+Replaces Ticket 3.1's hardcoded node positions with a real layout
+algorithm (`@dagrejs/dagre` — the actively-maintained fork, not the
+abandoned original `dagre` package) running client-side, plus drag-to-pan/
+wheel-to-zoom (a small custom implementation, no `d3-zoom` dependency).
+The input shape evolved from Ticket 3.1's toy `DemoGraph` to
+`RenderGraph`/`RenderNode`/`RenderEdge` — a thin, stable projection of
+Sprint 2's `GraphNode`/`GraphEdge` (real `GraphModel` wiring is still
+Ticket 3.4). Layout computation itself (`render/layout.ts`) is DOM-free
+and runs identically in Node, so it's unit-tested directly without a
+browser — including the PO Question 14 1,000-node performance target.
+
+**Modules:** `src/render/layout.ts`, `src/render/browser/app.ts` (rewritten)
+
+**Full detail:** [`docs/render-architecture.md`](render-architecture.md)
+— why layout runs in the browser rather than at Node build time (Sprint
+5's cluster expand/collapse needs it), the pan/zoom mechanism, and the
+SVG-markup-snapshot visual-regression approach.
+
+**Related:** [ADR 0006](adr/0006-layout-algorithm-and-pan-zoom-choice.md)
+(layout algorithm, pan/zoom, visual regression, and a test-suite-health
+fix — sharing one browser process per test file instead of per test —
+that came out of adding this ticket's tests)
+
+**Try it:** `npm run render:demo` writes a real, openable
+`archlens-output/index.html` — now a 24-node sample architecture; try
+dragging to pan and scrolling to zoom.
+
 ---
 
-*(Later sprints' search, blast radius, diff, rendering get their own
-entries here as they're built.)*
+*(Later sprints' search, blast radius, diff — and Sprint 3's own remaining
+tickets 3.3–3.4 — get their own entries here as they're built.)*

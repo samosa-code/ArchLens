@@ -10,20 +10,24 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.browser.json",
     "lint": "eslint .",
     "build": "tsc --project tsconfig.build.json",
-    "demo": "npm run build && node dist/cli.js"
+    "demo": "npm run build && node dist/cli.js",
+    "render:demo": "npm run build && node dist/render/demo.js"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",
+    "playwright": "^1.61.1",
     "typescript": "^5.5.0",
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.0.0",
+    "esbuild": "^0.28.1",
     "glob": "^13.0.6",
     "jsonc-parser": "^3.3.1",
     "yaml": "^2.5.0"

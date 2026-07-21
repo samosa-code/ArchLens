@@ -39,11 +39,13 @@ view it, no AWS credentials required. Static analysis only.
 ## Status
 
 ✅ **Sprint 1 (parser) is complete.** ✅ **Sprint 2 (graph model) is
-complete through Ticket 2.4.** Scoped from a PRD and sprint/ticket plan
-(see `internal-docs/`, kept local/untracked for now). Implementation
-follows the build order: parser → graph model → render → search → blast
-radius → export → security/cost flags → diff → CI integration → polish —
-Sprint 3 (rendering) is next.
+complete through Ticket 2.4.** 🚧 **Sprint 3 (rendering) is in progress
+— Tickets 3.1 (HTML bundle scaffolding) and 3.2 (layout & SVG rendering)
+done.** Scoped from a PRD and sprint/ticket plan (see `internal-docs/`,
+kept local/untracked for now).
+Implementation follows the build order: parser → graph model → render →
+search → blast radius → export → security/cost flags → diff → CI
+integration → polish.
 
 Sprint 1 delivered: YAML/JSON loading with source positions and
 skip-and-warn multi-file handling, full intrinsic-function resolution
@@ -63,8 +65,18 @@ resolution into `crossStackImport` edges, and a CLI demo
 summary. See [`docs/graph-architecture.md`](docs/graph-architecture.md)
 for that pipeline end to end.
 
+Sprint 3 so far: the bundle-and-inline pipeline that turns a graph into
+one self-contained `index.html` (Ticket 3.1) — `esbuild` bundles the
+browser-side renderer with its data baked in as a literal, zero network
+requests once opened, verified with a real headless browser — plus real
+graph layout via `@dagrejs/dagre`, drag-to-pan/wheel-to-zoom, and
+responsive rendering up to 1,000 nodes (Ticket 3.2). Run
+`npm run render:demo` to write a real, openable 24-node example. Still a
+synthetic sample graph, not the real pipeline — that wiring is Ticket 3.4.
+See [`docs/render-architecture.md`](docs/render-architecture.md).
+
 [`docs/developer-guide.md`](docs/developer-guide.md) is the project-wide
-doc index across both sprints, and [`LIMITATIONS.md`](LIMITATIONS.md)
+doc index across all sprints, and [`LIMITATIONS.md`](LIMITATIONS.md)
 tracks what's deliberately not supported yet.
 
 ## How multi-stack merging works

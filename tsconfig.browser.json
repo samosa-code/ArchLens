@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM"],
+    "noEmit": true,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["src/render/browser"],
+  "exclude": []
+}
