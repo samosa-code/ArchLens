@@ -66,3 +66,19 @@ Resources:
         Fn::Join: [":", [!Ref InstanceType, "suffix"]]
       ImportValueNonStaticExpr: !ImportValue
         Fn::Join: [":", [!Ref EnvName, "suffix"]]
+      GetStackOutputCall:
+        Fn::GetStackOutput: [!Ref MyBucket, "network-stack", "VpcId"]
+      GetAZsBareForm: !GetAZs ""
+      GetAZsWithRegionRef: !GetAZs
+        Ref: AWS::Region
+      GetAZsWithLiteralRegion: !GetAZs us-west-2
+      SelectFromGetAZsBare: !Select [0, !GetAZs ""]
+      SelectFromGetAZsWithRegionRef: !Select
+        - 2
+        - !GetAZs
+            Ref: AWS::Region
+      SelectDynamicIndexFromGetAZs: !Select [!Ref EnvName, !GetAZs ""]
+      SplitFullyStatic: !Split [",", "a,b,c"]
+      SplitOfNonLiteralSource: !Split [",", !Ref EnvName]
+      SplitWithNonLiteralDelimiter: !Split [!Ref EnvName, "a,b,c"]
+      SelectFromSplit: !Select [1, !Split [",", "a,b,c"]]

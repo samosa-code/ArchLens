@@ -38,21 +38,76 @@ view it, no AWS credentials required. Static analysis only.
 
 ## Status
 
-✅ **Sprint 1 (parser) is complete.** Scoped from a PRD and sprint/ticket
-plan (see `internal-docs/`, kept local/untracked for now). Implementation
+✅ **Sprint 1 (parser) is complete.** ✅ **Sprint 2 (graph model) is
+complete through Ticket 2.4.** Scoped from a PRD and sprint/ticket plan
+(see `internal-docs/`, kept local/untracked for now). Implementation
 follows the build order: parser → graph model → render → search → blast
 radius → export → security/cost flags → diff → CI integration → polish —
-Sprint 2 (graph model) is next.
+Sprint 3 (rendering) is next.
 
-Delivered: YAML/JSON loading with source positions and skip-and-warn
-multi-file handling, full intrinsic-function resolution (`Ref`,
-`Fn::GetAtt`, `Fn::Join`, `Fn::Select`, `Fn::Sub`, `Fn::FindInMap`,
+Sprint 1 delivered: YAML/JSON loading with source positions and
+skip-and-warn multi-file handling, full intrinsic-function resolution
+(`Ref`, `Fn::GetAtt`, `Fn::Join`, `Fn::Select`, `Fn::Sub`, `Fn::FindInMap`,
 `Fn::ImportValue` (stub), `Fn::If`) with arbitrary nesting depth, and
 `Conditions`-block evaluation. See
-[`docs/parser-architecture.md`](docs/parser-architecture.md) for the
-pipeline end to end, [`docs/developer-guide.md`](docs/developer-guide.md)
-for the project-wide doc index, and [`LIMITATIONS.md`](LIMITATIONS.md) for
-what's deliberately not supported yet.
+[`docs/parser-architecture.md`](docs/parser-architecture.md) for that
+pipeline end to end.
+
+Sprint 2 delivered: a resource graph (`GraphNode`/`GraphEdge`) built from
+one template, an export/import symbol table across N templates (with an
+explicitly-labeled "assumed" resolution strategy for the deploy-time-only
+values, like `AWS::StackName`, that real export names are built from — see
+"How multi-stack merging works" below), cross-stack `Fn::ImportValue`
+resolution into `crossStackImport` edges, and a CLI demo
+(`npm run demo -- "<glob>"`) that runs the whole pipeline and prints a
+summary. See [`docs/graph-architecture.md`](docs/graph-architecture.md)
+for that pipeline end to end.
+
+[`docs/developer-guide.md`](docs/developer-guide.md) is the project-wide
+doc index across both sprints, and [`LIMITATIONS.md`](LIMITATIONS.md)
+tracks what's deliberately not supported yet.
+
+## How multi-stack merging works
+
+Real CloudFormation deployments are rarely one template — a common pattern
+is a "network" stack that exports its VPC/subnet/cluster IDs via `Outputs`
++ `Export`, and one or more "service" stacks that consume them via
+`Fn::ImportValue`. ArchLens merges any number of template files you point
+it at into one graph, connecting these across files wherever it can:
+
+```
+npm run demo -- "path/to/stacks/*/template.yaml"
+```
+
+1. **Each template becomes its own subgraph first** (`buildGraph()`) —
+   nodes for every resource, edges for same-template `Ref`/`Fn::GetAtt`
+   references and `DependsOn`. A resource's identity always includes which
+   file it came from, so two unrelated templates that happen to reuse the
+   same logical ID (e.g. both call something `Role`) never get silently
+   merged into one node.
+2. **Every `Outputs`/`Export` across every template is indexed** into one
+   lookup table, keyed by the export's name.
+3. **Every `Fn::ImportValue` is matched against that table.** A matched
+   import becomes a real edge connecting a resource in the *consuming*
+   template to a resource in the *exporting* one.
+
+The wrinkle: an export's name is very often built from `AWS::StackName` —
+a value CloudFormation only knows at actual deploy time, which a purely
+static tool reading template files on disk cannot. Rather than give up and
+call every cross-stack reference unresolvable, ArchLens assumes a stable,
+consistent stand-in value per template (derived from its file/folder name)
+so that two sibling templates' export and import expressions still line up
+— but this is **always an assumption, clearly labeled as such**
+(`matchedVia` on the resulting edge), never presented as if it were a real
+deployed value. An import that still can't be matched to any export across
+the files you provided is flagged, both as a CLI warning and (once
+rendering exists) a visible marker on the graph — the run always completes
+with whatever *did* resolve rather than failing outright.
+
+Full detail, including the specific real-world CloudFormation patterns
+that shaped this (and the one case where two service templates in the same
+example fixture deliberately *don't* fully resolve, because they genuinely
+want different network stacks): [`docs/graph-architecture.md`](docs/graph-architecture.md).
 
 ## Non-goals (for now)
 

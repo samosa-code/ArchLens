@@ -11,14 +11,18 @@ indexes it alongside future modules, and the ADRs and `LIMITATIONS.md`
 referenced throughout are the detail-and-decision records this document
 points to rather than duplicates.
 
-**See it run:** `npm run demo` (or `npm run demo -- path/to/template.yaml`
-for a specific file) builds the project and runs `src/cli.ts` — Sprint 1's
-demo entry point, not the real product CLI — printing the fully-resolved
-JSON model for a template with both nested intrinsics and a real
-`Conditions` block (`examples/03-multi-stack-ecs-fargate/service-stack`,
-by default) straight to stdout. Sprint 3 (Ticket 3.4) builds the actual
-`npx archlens <glob> --out <dir>` CLI on top of this file rather than
-replacing it.
+**See it run:** `npm run demo` (or `npm run demo -- "path/to/*.yaml"` for a
+specific glob) builds the project and runs `src/cli.ts`. As of Ticket 2.4,
+this prints a merged-graph summary (node/edge counts, resolved and
+unresolved cross-stack references — see
+[`docs/graph-architecture.md`](graph-architecture.md)) rather than a
+single template's raw resolved JSON, since `cli.ts` now exercises the full
+Sprint 1 + Sprint 2 pipeline (`mergeGraphs()`), not just this parser stage
+in isolation. The parser stage documented below is still exactly what runs
+underneath — `mergeGraphs()` calls `buildGraph()` calls this module — this
+document remains the accurate reference for that stage specifically. Sprint
+3 (Ticket 3.4) builds the actual `npx archlens <glob> --out <dir>` CLI
+(flags, HTML rendering) on top of this same file rather than replacing it.
 
 ## Pipeline overview
 
@@ -173,6 +177,8 @@ to one plain string.
 | `parameterRef` | `Ref` to a declared `Parameters` entry with no statically-known `Default`. |
 | `pseudoParameterRef` | `Ref` to an `AWS::*` pseudo parameter — always deploy-time-unknown, detected generically by prefix. |
 | `importValueRef` | `Fn::ImportValue`, tagged but not resolved — see below. |
+| `availabilityZonesRef` | `Fn::GetAZs` — the AZ list for `region`, never resolved to actual names (deploy-time *and* account-specific). |
+| `availabilityZoneRef` | `Fn::Select` over an `availabilityZonesRef` with a static index — one specific AZ by position, name still unknown. |
 | `unresolved` | Genuinely undeterminable, always with a human-readable `reason`. Never silently guessed. |
 
 ### Per-function behavior
@@ -194,7 +200,25 @@ to one plain string.
 - **`Fn::Select`** — only the *index* needs to be static; the selected
   item resolves however it resolves (literal or reference) regardless of
   whether the list's other items are static. Out-of-bounds and
-  non-numeric/dynamic indices resolve to `unresolved`.
+  non-numeric/dynamic indices resolve to `unresolved`. If the list argument
+  isn't a literal AST array, it's resolved first: an `availabilityZonesRef`
+  (from `Fn::GetAZs`) becomes an `availabilityZoneRef` at the given index
+  — the extremely common `!Select [N, !GetAZs region]` idiom, confirmed in
+  13 of 67 fixtures during a real-world stress test (see
+  `LIMITATIONS.md`'s "Real-world stress test" section) — and a resolved
+  `list` (most commonly from `Fn::Split`) is selected from directly.
+- **`Fn::GetAZs`** — resolves its region argument (any shape) and wraps the
+  result as `{kind: 'availabilityZonesRef', region}`. Never resolves to
+  actual zone names — which zones exist and are enabled is deploy-time
+  *and* AWS-account-specific, the same reasoning `pseudoParameterRef`
+  already applies elsewhere.
+- **`Fn::Split`** — unlike `Fn::GetAZs`, a pure string operation: computes
+  the actual split into a `list` of literal scalars when both the
+  delimiter and source string are literal; resolves to `unresolved`
+  (naming which argument failed) otherwise. Common real pattern:
+  `!Select [0, !Split ["=", !Ref Tag]]` for parsing a `"key=value"`
+  parameter — resolves fully when `Tag` has a literal `Default`, stays
+  correctly `unresolved` when it doesn't.
 - **`Fn::Sub`** — both short form (bare string) and long form
   (`[template, {Name: value}]`, whose substitution values may be any
   intrinsic). Each `${...}` placeholder resolves via: the explicit
@@ -219,6 +243,12 @@ to one plain string.
 - **`Fn::If`** — see Stage 3; it's the one intrinsic whose resolution
   depends on `conditions.ts`'s output rather than only `intrinsics.ts`'s
   own context fields.
+- **`Fn::GetStackOutput`** — recognized but always resolves to `unresolved`
+  (PO Question 4e, Sprint 2). Unlike a genuinely-unimplemented intrinsic
+  (e.g. `Fn::Base64`, which passes through unchanged), this one is
+  explicitly flagged, since it represents a real cross-stack reference that
+  would otherwise be silently misrepresented as an opaque plain object. See
+  `LIMITATIONS.md` for why full resolution isn't implemented.
 
 ## Stage 3: Conditions evaluation
 
@@ -375,12 +405,16 @@ in `common/types.ts` is the right amount of friction for that.
 
 See [`LIMITATIONS.md`](../LIMITATIONS.md) for the complete, current list
 (kept up to date there, not duplicated here). Headline items: no
-`--parameters` file, `Fn::ImportValue` never resolves an actual
-cross-stack value (needs Sprint 2), several intrinsics have no resolver
-at all yet (`Fn::Base64`, `Fn::Cidr`, `Fn::Split`, `Fn::GetAZs`,
-`Fn::Transform`, `Fn::ForEach`), YAML anchors/aliases aren't supported by
-the loader, and malformed-template handling is skip-and-warn at the
-multi-file level only (a single `loadTemplate` call still throws).
+`--parameters` file, several intrinsics still have no resolver at all
+(`Fn::Base64`, `Fn::Cidr`, `Fn::Transform`, `Fn::ForEach` — `Fn::GetAZs`
+and `Fn::Split` *were* on this list until a Sprint 2 real-world stress
+test found them in active use and both were implemented), YAML
+anchors/aliases aren't supported by the loader, and malformed-template
+handling is skip-and-warn at the multi-file level only (a single
+`loadTemplate` call still throws). `Fn::ImportValue` resolving an actual
+cross-stack value is Sprint 2's concern, not Sprint 1's — see
+[`docs/graph-architecture.md`](graph-architecture.md), which is complete
+as of Ticket 2.4.
 
 ## Related documents
 

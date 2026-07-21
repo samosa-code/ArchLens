@@ -1,0 +1,29 @@
+Resources:
+  ExportedBucket:
+    Type: AWS::S3::Bucket
+
+Outputs:
+  PlainName:
+    Value: !Ref ExportedBucket
+    Export:
+      Name: PlainExportName
+
+  RegionBasedExport:
+    Value: !GetAtt ExportedBucket.Arn
+    Export:
+      Name: !Sub "${AWS::Region}-GlobalThing"
+
+  LiteralValueExport:
+    Value: "just-a-string"
+    Export:
+      Name: LiteralValueExportName
+
+  SharedAmbiguousName:
+    Value: !Ref ExportedBucket
+    Export:
+      Name: SharedAmbiguousExportName
+
+  CommonSuffixExport:
+    Value: !Ref ExportedBucket
+    Export:
+      Name: !Join [":", [!Ref "AWS::StackName", "CommonSuffix"]]

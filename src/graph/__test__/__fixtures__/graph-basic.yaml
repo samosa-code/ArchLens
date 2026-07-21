@@ -1,0 +1,71 @@
+Parameters:
+  EnvName:
+    Type: String
+    Default: prod
+
+Conditions:
+  IsProd: !Equals [!Ref EnvName, prod]
+  IsNotProd: !Equals [!Ref EnvName, staging]
+
+Resources:
+  MyBucket:
+    Type: AWS::S3::Bucket
+
+  Consumer:
+    Type: AWS::Custom::Thing
+    Properties:
+      RefEdge: !Ref MyBucket
+      GetAttEdge: !GetAtt MyBucket.Arn
+      DuplicateRefList:
+        - !Ref MyBucket
+        - !Ref MyBucket
+      JoinedRef: !Join ["-", [!Ref MyBucket, "suffix"]]
+      ImportValueWithRef: !ImportValue
+        Fn::Join: [":", [!Ref MyBucket, "suffix"]]
+
+  ExcludedResource:
+    Type: AWS::S3::Bucket
+    Condition: IsNotProd
+
+  UnknownInclusionResource:
+    Type: AWS::S3::Bucket
+    Condition: NoSuchCondition
+
+  DependsOnScalar:
+    Type: AWS::S3::Bucket
+    DependsOn: MyBucket
+
+  DependsOnArray:
+    Type: AWS::S3::Bucket
+    DependsOn:
+      - MyBucket
+      - Consumer
+
+  DependsOnDuplicate:
+    Type: AWS::S3::Bucket
+    DependsOn:
+      - MyBucket
+      - MyBucket
+
+  DependsOnInvalidTarget:
+    Type: AWS::S3::Bucket
+    DependsOn: NoSuchResource
+
+  DependsOnMixedValidity:
+    Type: AWS::S3::Bucket
+    DependsOn:
+      - MyBucket
+      - NoSuchResourceEither
+
+  DependsOnMalformed:
+    Type: AWS::S3::Bucket
+    DependsOn: 5
+
+  ResourceWithMetadataOnly:
+    Type: AWS::S3::Bucket
+    Metadata:
+      RefLookingButNotReal:
+        Ref: MyBucket
+
+  NoPropertiesResource:
+    Type: AWS::S3::Bucket

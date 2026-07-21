@@ -1,0 +1,60 @@
+Parameters:
+  EnvName:
+    Type: String
+
+Conditions:
+  AlwaysFalse: !Equals ["a", "b"]
+
+Resources:
+  Dummy:
+    Type: AWS::S3::Bucket
+
+Outputs:
+  LiteralExport:
+    Value: !Ref Dummy
+    Export:
+      Name: PlainLiteralName
+
+  StackNameJoinExport:
+    Value: !Ref Dummy
+    Export:
+      Name: !Join [":", [!Ref "AWS::StackName", "Thing"]]
+
+  RegionAndStackNameExport:
+    Value: !Ref Dummy
+    Export:
+      Name: !Sub "${AWS::Region}-${AWS::StackName}-Combo"
+
+  ParamDependentExport:
+    Value: !Ref Dummy
+    Export:
+      Name: !Sub "Prefix-${EnvName}"
+
+  ExcludedExport:
+    Condition: AlwaysFalse
+    Value: !Ref Dummy
+    Export:
+      Name: ExcludedName
+
+  UnknownInclusionExport:
+    Condition: NoSuchCondition
+    Value: !Ref Dummy
+    Export:
+      Name: UnknownInclusionName
+
+  NoExportOutput:
+    Value: !Ref Dummy
+
+  MalformedExportNoName:
+    Value: !Ref Dummy
+    Export: {}
+
+  SelfDuplicateA:
+    Value: !Ref Dummy
+    Export:
+      Name: SelfDuplicateName
+
+  SelfDuplicateB:
+    Value: !Ref Dummy
+    Export:
+      Name: SelfDuplicateName

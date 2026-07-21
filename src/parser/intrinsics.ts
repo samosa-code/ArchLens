@@ -40,6 +40,10 @@ export function buildResolutionContext(template: AstNode): ResolutionContext {
 /** Resolves a `Ref` target name against Parameters, Resources, and AWS pseudo parameters. */
 function resolveRef(name: string, context: ResolutionContext): ResolvedValue {
   if (name.startsWith('AWS::')) {
+    const assumed = context.assumedPseudoParameters?.get(name);
+    if (assumed !== undefined) {
+      return { kind: 'scalar', value: assumed };
+    }
     return { kind: 'pseudoParameterRef', name };
   }
   if (context.parameters.has(name)) {
@@ -136,10 +140,33 @@ function resolveJoin(argsNode: AstNode, context: ResolutionContext): ResolvedVal
 }
 
 /**
+ * Resolves `Fn::GetAZs`'s region argument (any shape — a literal string,
+ * `AWS::Region`, or anything else) and wraps the result as an
+ * `availabilityZonesRef`. Never guesses actual AZ names: which zones exist
+ * and are enabled is deploy-time *and* account-specific, not something a
+ * template alone can determine, the same reasoning `pseudoParameterRef`
+ * already applies to other AWS-environment facts.
+ */
+function resolveGetAZs(argsNode: AstNode, context: ResolutionContext): ResolvedValue {
+  return { kind: 'availabilityZonesRef', region: resolveValue(argsNode, context) };
+}
+
+/**
  * Resolves `Fn::Select`'s `[index, [items...]]` argument. Only the *index*
  * needs to be static — the selected item is returned however it resolves
  * (literal or reference), regardless of whether the list's other items are
  * themselves static.
+ *
+ * The list argument gets two special cases beyond a literal AST array:
+ * - `!Select [N, !GetAZs region]` — an extremely common real-world idiom
+ *   for pinning a resource to "the Nth Availability Zone" — resolves to a
+ *   distinct `availabilityZoneRef` rather than falling through to
+ *   `unresolved`, since the *position* is statically known even though the
+ *   actual AZ name isn't.
+ * - Any other intrinsic (most commonly `Fn::Split`, e.g. `!Select [0,
+ *   !Split ["=", !Ref Tag]]`) that itself resolves to a `list` — selects
+ *   directly from that resolved list, the same as it would from a literal
+ *   AST array.
  */
 function resolveSelect(argsNode: AstNode, context: ResolutionContext): ResolvedValue {
   if (argsNode.kind !== 'array' || argsNode.items.length !== 2) {
@@ -157,6 +184,17 @@ function resolveSelect(argsNode: AstNode, context: ResolutionContext): ResolvedV
 
   const listNode = argsNode.items[1]!;
   if (listNode.kind !== 'array') {
+    const listResolved = resolveValue(listNode, context);
+    if (listResolved.kind === 'availabilityZonesRef') {
+      return { kind: 'availabilityZoneRef', region: listResolved.region, index };
+    }
+    if (listResolved.kind === 'list') {
+      const selected = listResolved.items[index];
+      if (selected === undefined) {
+        return { kind: 'unresolved', reason: `Fn::Select index ${index} is out of bounds for a ${listResolved.items.length}-item list` };
+      }
+      return selected;
+    }
     return { kind: 'unresolved', reason: 'Fn::Select list argument is not statically determinable' };
   }
 
@@ -251,6 +289,33 @@ function resolveSub(argsNode: AstNode, context: ResolutionContext): ResolvedValu
 function resolveToLiteralString(node: AstNode, context: ResolutionContext): string | undefined {
   const resolved = resolveValue(node, context);
   return resolved.kind === 'scalar' && typeof resolved.value === 'string' ? resolved.value : undefined;
+}
+
+/**
+ * Resolves `Fn::Split`'s `[delimiter, sourceString]` arguments. Unlike
+ * `Fn::GetAZs`, this is a pure string operation with no deploy-time-only
+ * component — if both the delimiter and source string are literal, the
+ * actual split is computed (mirroring `Fn::Join`'s collapse-when-static
+ * behavior in reverse), rather than only ever tagging the call. Very
+ * common paired with `Fn::Select` in real templates (`!Select [0, !Split
+ * ["=", !Ref SomeTag]]`, parsing a `"key=value"`-formatted parameter).
+ */
+function resolveSplit(argsNode: AstNode, context: ResolutionContext): ResolvedValue {
+  if (argsNode.kind !== 'array' || argsNode.items.length !== 2) {
+    return { kind: 'unresolved', reason: 'Fn::Split arguments must be [delimiter, sourceString]' };
+  }
+
+  const delimiter = resolveToLiteralString(argsNode.items[0]!, context);
+  if (delimiter === undefined) {
+    return { kind: 'unresolved', reason: 'Fn::Split delimiter is not statically determinable' };
+  }
+
+  const source = resolveToLiteralString(argsNode.items[1]!, context);
+  if (source === undefined) {
+    return { kind: 'unresolved', reason: 'Fn::Split source string is not statically determinable' };
+  }
+
+  return { kind: 'list', items: source.split(delimiter).map((part) => ({ kind: 'scalar', value: part })) };
 }
 
 /**
@@ -350,12 +415,18 @@ function resolveIf(argsNode: AstNode, context: ResolutionContext): ResolvedValue
 /**
  * Resolves a single property value node against a {@link ResolutionContext},
  * substituting `Ref`, `Fn::GetAtt`, `Fn::Join`, `Fn::Select`, `Fn::Sub`,
- * `Fn::FindInMap`, `Fn::ImportValue`, and `Fn::If` calls with their resolved
- * value where statically determinable. `Fn::If` reads `context.conditions`
- * rather than evaluating anything itself — see `parser/conditions.ts`.
+ * `Fn::FindInMap`, `Fn::ImportValue`, `Fn::GetAZs`, `Fn::Split`, and
+ * `Fn::If` calls with their resolved value where statically determinable.
+ * `Fn::If` reads `context.conditions` rather than evaluating anything
+ * itself — see `parser/conditions.ts`.
+ * `Fn::GetStackOutput` is recognized but deliberately reported `unresolved`
+ * (its cross-account/cross-Region resolution is out of scope — see PO
+ * Question 4e in SPRINT-PLAN.md), rather than falling through silently like
+ * other genuinely-unimplemented intrinsics (e.g. `Fn::Base64`), since it
+ * represents a real cross-stack reference that would otherwise be lost.
  * Anything else (plain scalars/arrays/objects, or an intrinsic not yet
- * implemented, e.g. `Fn::Base64`) passes through structurally unchanged,
- * recursing into any nested intrinsics it contains.
+ * implemented) passes through structurally unchanged, recursing into any
+ * nested intrinsics it contains.
  */
 export function resolveValue(node: AstNode, context: ResolutionContext): ResolvedValue {
   if (node.kind === 'object' && node.entries.length === 1) {
@@ -381,6 +452,15 @@ export function resolveValue(node: AstNode, context: ResolutionContext): Resolve
     }
     if (key === 'Fn::ImportValue') {
       return resolveImportValue(value, context);
+    }
+    if (key === 'Fn::GetStackOutput') {
+      return { kind: 'unresolved', reason: 'Fn::GetStackOutput is not yet supported' };
+    }
+    if (key === 'Fn::GetAZs') {
+      return resolveGetAZs(value, context);
+    }
+    if (key === 'Fn::Split') {
+      return resolveSplit(value, context);
     }
     if (key === 'Fn::If') {
       return resolveIf(value, context);

@@ -1,0 +1,19 @@
+Resources:
+  OtherBucket:
+    Type: AWS::S3::Bucket
+
+Outputs:
+  ParamStyleExport:
+    Value: !Ref OtherBucket
+    Export:
+      Name: !Join [":", [!Ref "AWS::StackName", "ParamStyle"]]
+
+  SharedAmbiguousName:
+    Value: !Ref OtherBucket
+    Export:
+      Name: SharedAmbiguousExportName
+
+  CommonSuffixExport:
+    Value: !Ref OtherBucket
+    Export:
+      Name: !Join [":", [!Ref "AWS::StackName", "CommonSuffix"]]

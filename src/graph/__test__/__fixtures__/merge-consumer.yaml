@@ -1,0 +1,19 @@
+Parameters:
+  UnrelatedParam:
+    Type: String
+    Default: whatever
+
+Resources:
+  ConsumerFn:
+    Type: AWS::Custom::Thing
+    Properties:
+      ExactMatchImport: !ImportValue PlainExportName
+      PseudoParamImport: !ImportValue
+        Fn::Sub: "${AWS::Region}-GlobalThing"
+      CandidateStackNameImport: !ImportValue
+        Fn::Join: [":", [!Ref UnrelatedParam, "ParamStyle"]]
+      AmbiguousCandidateImport: !ImportValue
+        Fn::Join: [":", [!Ref UnrelatedParam, "CommonSuffix"]]
+      DuplicateNameImport: !ImportValue SharedAmbiguousExportName
+      LiteralValueImport: !ImportValue LiteralValueExportName
+      GenuinelyMissingImport: !ImportValue NoSuchExportAnywhere

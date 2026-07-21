@@ -1,0 +1,9 @@
+Resources:
+  DummyB:
+    Type: AWS::S3::Bucket
+
+Outputs:
+  CrossFileDuplicate:
+    Value: !Ref DummyB
+    Export:
+      Name: PlainLiteralName

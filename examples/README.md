@@ -1,7 +1,7 @@
 # Example Templates
 
 Real-world CloudFormation templates used as test/dev fixtures for ArchLens.
-Pulled from public repos on 2026-07-19. Every file is unmodified from
+01–13 pulled from public repos on 2026-07-19; 14 pulled 2026-07-21. Every file is unmodified from
 upstream **except**: `05-malformed-and-missing-ref/` (hand-derived, clearly
 marked synthetic), and `07-vulnerable-cfngoat/cfngoat.yaml` (two pairs of
 AWS example-placeholder credentials redacted post-fetch — GitHub's push
@@ -32,6 +32,7 @@ exists.
 | `aws-cloudformation/aws-cloudformation-templates` (`Solutions/VPCPeering`) | Real VPC peering solution — 10 |
 | [`widdix/aws-cf-templates`](https://github.com/widdix/aws-cf-templates) | Different-repo production-grade collection — 11, 12 |
 | [`bridgecrewio/checkov`](https://github.com/bridgecrewio/checkov) | Clean minimal pass/fail pairs per security check, from its own test suite — 13 |
+| [`aws-cloudformation/aws-cloudformation-templates`](https://github.com/aws-cloudformation/aws-cloudformation-templates) (57 files across ~30 service areas), [`aws-samples/serverless-patterns`](https://github.com/aws-samples/serverless-patterns) (8 SAM patterns), [`aws-quickstart/quickstart-aws-vpc`](https://github.com/aws-quickstart/quickstart-aws-vpc) + [`aws-quickstart/quickstart-linux-bastion`](https://github.com/aws-quickstart/quickstart-linux-bastion) (2 large templates) | Deliberately broad, diverse real-world stress-test corpus — 14 |
 
 ## 01-simple-lambda
 
@@ -53,22 +54,48 @@ tables, network ACLs, internet gateway. Heavy `Fn::FindInMap` (against
 ## 03-multi-stack-ecs-fargate
 
 **Source:** `ECS/FargateLaunchType/clusters/public-vpc.yaml` +
-`ECS/FargateLaunchType/services/public-service.yaml`
+`ECS/FargateLaunchType/services/public-service.yaml` +
+`ECS/FargateLaunchType/services/private-subnet-public-service.yaml`
 
-A **genuine** two-stack pair (AWS's own recommended deploy order: network
-stack first, service stack against it):
+A **genuine** multi-stack trio (AWS's own recommended deploy order: network
+stack first, then any number of service stacks against it):
 
 - `network-stack/` — VPC, subnets, IGW, route table, ECS cluster, ALB +
   listener + target group, security groups (including real SG-to-SG
   ingress via `SourceSecurityGroupId`, not just CIDR), IAM roles (14
   resources). Every cross-stack value is pushed to `Outputs` with
-  `Export.Name: !Join [':', [!Ref AWS::StackName, <name>]]`.
+  `Export.Name: !Join [':', [!Ref AWS::StackName, <name>]]` — note this
+  uses the **pseudo parameter** `AWS::StackName`, not a regular parameter,
+  so the export name itself can never be statically resolved from this
+  file alone (see the Sprint 2 prep note below — this affects how the
+  symbol table in Ticket 2.2 has to work).
 - `service-stack/` — ECS task definition + service + listener rule + target
   group. Pulls cross-stack values via `Fn::ImportValue` wrapped in
-  `Fn::Join` (nested intrinsic, not a bare string). Real `Conditions` block
+  `Fn::Join` (nested intrinsic, not a bare string), keyed off an explicit
+  `StackName` *parameter* (`Default: production`) rather than the pseudo
+  parameter — which is exactly what makes the import side statically
+  resolvable even though the export side isn't. Real `Conditions` block
   (`HasCustomRole`) gating an `Fn::If`.
+- `private-subnet-public-service/` — a genuine sibling consumer of the
+  *same* network stack, added specifically for Sprint 2: confirmed (by
+  running both through ArchLens's own resolver, not just by inspection)
+  that it imports several of the same exports as `service-stack`
+  (`ClusterName`, `VPCId`, `PublicListener`) plus two it doesn't
+  (`PrivateSubnetOne`/`Two`). Gives Sprint 2's Ticket 2.4 a genuine 3-file
+  fan-out case — one exporter, two independent importers — rather than
+  just a 2-file chain.
 
 Primary fixture for Sprint 2 (cross-stack `Fn::ImportValue` resolution).
+
+**Sprint 2 prep note:** every `Export.Name` we found across every fixture
+in this whole `examples/` set (`03`, `06`, `11`, `12`) is built from
+`AWS::StackName` (or `AWS::Region`), never a plain literal or a resolvable
+parameter. That's not an edge case — it's the dominant real-world pattern.
+Ticket 2.2's symbol-table builder cannot assume export names are directly
+computable from the exporting template alone; it needs a deliberate answer
+for what `AWS::StackName` resolves to per input file (see the discussion
+this prompted — likely a new question for the Product Owner before that
+ticket starts).
 
 ## 04-unresolved-import
 
@@ -91,6 +118,11 @@ imports are flagged, not silently dropped" (PRD §6.1, PO Question 4).
   where no such resource exists (the real one is `LambdaRole`). Would fail
   `aws cloudformation validate-template` for real. Tests same-template
   unresolvable `Ref`/`GetAtt` — narrower than 04's cross-*stack* case.
+  **Also useful for Sprint 2:** it still exports the literal name
+  `LambdaRole`, unmodified from `01-simple-lambda`, which also exports
+  `LambdaRole` — the two together are a ready-made **duplicate export
+  name across templates** case, exactly what Ticket 2.2's testing
+  requirement asks for. No new fixture needed for that case.
 
 ## 06-nested-stack-quickstart
 
@@ -236,15 +268,37 @@ parameter's *default* is `0.0.0.0/0` — a real edge case for whether the
 security rule engine resolves parameter defaults before evaluating, not
 just literal `CidrIp` values.
 
+## 14-diverse-corpus
+
+**Source:** 67 real, independent (non-cross-referencing) templates fetched
+specifically to stress-test the parser + graph pipeline (Sprints 1–2)
+against far more service types, authoring styles, and template sizes than
+01–13 exercise individually — 57 from `aws-cloudformation-templates`
+across ~30 service areas (ECS/EKS, RDS/DynamoDB/Neptune/ElastiCache,
+`Fn::ForEach`, `Fn::Transform` macros, `CustomResources`, `StackSets`, IoT,
+DMS, EMR, ServiceCatalog, and more), 8 SAM (`Transform`) patterns from
+`aws-samples/serverless-patterns`, and 2 large AWS Quick Start templates
+(one 1,765 lines). Full per-file provenance:
+[`14-diverse-corpus/SOURCE.md`](14-diverse-corpus/SOURCE.md) (table) and
+[`14-diverse-corpus/MANIFEST.tsv`](14-diverse-corpus/MANIFEST.tsv) (the
+raw fetch list, re-fetchable).
+
+Run through `buildGraph()` individually and `mergeGraphs()` all at once —
+zero crashes; found and fixed two genuine parser gaps (`Fn::GetAZs`,
+`Fn::Split` — see `LIMITATIONS.md`'s "Real-world stress test" section for
+the full account); confirmed PO Question 4d's node-identity design at real
+scale (59 reused logical IDs across unrelated templates, zero collisions).
+Now a permanent regression suite: `src/graph/__test__/diverseCorpus.test.ts`.
+
 ## Coverage summary
 
 | Fixture | Files | Intrinsics | Conditions | Cross-stack | Nested stack | Security hits | Broken |
 |---|---|---|---|---|---|---|---|
 | 01 simple-lambda | 2 (yaml+json) | Ref, GetAtt, Sub | – | export only | – | – | – |
 | 02 complex-vpc-nat | 1 | FindInMap, Select, GetAZs, Join | – | – | – | – | – |
-| 03 multi-stack-ecs-fargate | 2 | ImportValue(Join), If, Join | ✅ | ✅ resolvable | – | – | – |
+| 03 multi-stack-ecs-fargate | 3 | ImportValue(Join), If, Join | ✅ | ✅ resolvable, **fan-out** | – | – | – |
 | 04 unresolved-import | 1 | ImportValue(Join) | ✅ | ✅ **unresolvable** | – | – | – |
-| 05 malformed-and-missing-ref | 2 | Ref, GetAtt, Sub | – | – | – | – | ✅ (2 kinds) |
+| 05 malformed-and-missing-ref | 2 | Ref, GetAtt, Sub | – | ✅ **dup. export name w/ 01** | – | – | ✅ (2 kinds) |
 | 06 nested-stack-quickstart | 3 | Sub, If, Join | ✅ | – | ✅ **3-level** | – | – |
 | 07 vulnerable-cfngoat | 1 | mixed | – | – | – | ✅ **all 3 rules** | – |
 | 08 cdk-synthesized | 1 | Sub, GetAtt, Ref | ✅ | – | ✅ (CDK asset nesting) | – | – |
@@ -253,3 +307,4 @@ just literal `CidrIp` values.
 | 11 large-production-wordpress-ha | 1 | If-heavy, FindInMap | ✅ | – | – | partial | – |
 | 12 diff-pair-wordpress-tls | 2 | – | – | – | – | – | – |
 | 13 checkov-security-rule-pairs | 8 | minimal | – | – | – | ✅ **pass/fail per rule** | – |
+| 14 diverse-corpus | 67 | GetAZs, Split, ForEach, Transform, custom resources, StackSets, SAM | ✅ (several) | – (independent) | – | – | – |

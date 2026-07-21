@@ -125,6 +125,71 @@ describe('resolveValue', () => {
       const result = resolveValue(consumerProp('SelectDynamicIndex'), context);
       expect(result).toEqual({ kind: 'unresolved', reason: 'Fn::Select index is not statically determinable' });
     });
+
+    test('with a static index into Fn::GetAZs resolves to an availabilityZoneRef, not unresolved', () => {
+      const result = resolveValue(consumerProp('SelectFromGetAZsBare'), context);
+      expect(result).toEqual({ kind: 'availabilityZoneRef', region: { kind: 'scalar', value: '' }, index: 0 });
+    });
+
+    test('with a static index into Fn::GetAZs {Ref: AWS::Region} preserves the region as a pseudoParameterRef', () => {
+      const result = resolveValue(consumerProp('SelectFromGetAZsWithRegionRef'), context);
+      expect(result).toEqual({
+        kind: 'availabilityZoneRef',
+        region: { kind: 'pseudoParameterRef', name: 'AWS::Region' },
+        index: 2,
+      });
+    });
+
+    test('with a dynamic index into Fn::GetAZs still resolves to unresolved (index is checked before the list)', () => {
+      const result = resolveValue(consumerProp('SelectDynamicIndexFromGetAZs'), context);
+      expect(result).toEqual({ kind: 'unresolved', reason: 'Fn::Select index is not statically determinable' });
+    });
+  });
+
+  describe('Fn::GetAZs', () => {
+    test('bare form (empty string region) resolves to an availabilityZonesRef with a literal empty-string region', () => {
+      const result = resolveValue(consumerProp('GetAZsBareForm'), context);
+      expect(result).toEqual({ kind: 'availabilityZonesRef', region: { kind: 'scalar', value: '' } });
+    });
+
+    test('with an explicit AWS::Region Ref preserves it as a pseudoParameterRef, never guessed', () => {
+      const result = resolveValue(consumerProp('GetAZsWithRegionRef'), context);
+      expect(result).toEqual({ kind: 'availabilityZonesRef', region: { kind: 'pseudoParameterRef', name: 'AWS::Region' } });
+    });
+
+    test('with a literal region name resolves to an availabilityZonesRef carrying that literal', () => {
+      const result = resolveValue(consumerProp('GetAZsWithLiteralRegion'), context);
+      expect(result).toEqual({ kind: 'availabilityZonesRef', region: { kind: 'scalar', value: 'us-west-2' } });
+    });
+  });
+
+  describe('Fn::Split', () => {
+    test('with a literal delimiter and literal source string computes the actual split', () => {
+      const result = resolveValue(consumerProp('SplitFullyStatic'), context);
+      expect(result).toEqual({
+        kind: 'list',
+        items: [
+          { kind: 'scalar', value: 'a' },
+          { kind: 'scalar', value: 'b' },
+          { kind: 'scalar', value: 'c' },
+        ],
+      });
+    });
+
+    test('with a non-literal source string resolves to unresolved', () => {
+      const result = resolveValue(consumerProp('SplitOfNonLiteralSource'), context);
+      expect(result).toEqual({ kind: 'unresolved', reason: 'Fn::Split source string is not statically determinable' });
+    });
+
+    test('with a non-literal delimiter resolves to unresolved', () => {
+      const result = resolveValue(consumerProp('SplitWithNonLiteralDelimiter'), context);
+      expect(result).toEqual({ kind: 'unresolved', reason: 'Fn::Split delimiter is not statically determinable' });
+    });
+
+    test('Fn::Select over a fully-static Fn::Split picks the literal item', () => {
+      const result = resolveValue(consumerProp('SelectFromSplit'), context);
+      expect(result).toEqual({ kind: 'scalar', value: 'b' });
+    });
   });
 
   describe('Fn::Sub', () => {
@@ -251,6 +316,16 @@ describe('resolveValue', () => {
           kind: 'list',
           items: [{ kind: 'parameterRef', name: 'EnvName' }, { kind: 'scalar', value: 'suffix' }],
         },
+      });
+    });
+  });
+
+  describe('Fn::GetStackOutput', () => {
+    test('is recognized and reported unresolved, not silently passed through as a plain object', () => {
+      const result = resolveValue(consumerProp('GetStackOutputCall'), context);
+      expect(result).toEqual({
+        kind: 'unresolved',
+        reason: 'Fn::GetStackOutput is not yet supported',
       });
     });
   });

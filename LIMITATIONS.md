@@ -68,7 +68,146 @@ keep current.
   possible. Matching it against another template's `Export.Name` needs the
   multi-stack merge Sprint 2 builds.
 - **Intrinsics with no resolver at all yet**: `Fn::Base64`, `Fn::Cidr`,
-  `Fn::Split`, `Fn::GetAZs`, `Fn::Transform`, and the newer `Fn::ForEach`
-  template language extension. None are required by any Sprint 1 ticket.
-  Property values using them pass through structurally unchanged (nested
-  intrinsics inside them still resolve) rather than erroring.
+  `Fn::Transform`, and the newer `Fn::ForEach` template language extension.
+  None are required by any Sprint 1 ticket. Property values using them pass
+  through structurally unchanged (nested intrinsics inside them still
+  resolve) rather than erroring. (`Fn::GetAZs` and `Fn::Split` *were* in
+  this list — see below; both were added after a real-world stress test
+  against 67 diverse fetched templates showed `Fn::GetAZs` used in 13 of
+  them, almost always as `!Select [N, !GetAZs region]` for pinning a
+  resource to "the Nth Availability Zone.")
+- **`Fn::GetAZs` never resolves to actual AZ names** — always deploy-time
+  *and* AWS-account-specific (which zones are enabled differs per
+  account), so it resolves to a distinct `availabilityZonesRef` (region
+  tagged, not guessed), the same "recognized but never guessed" stance as
+  `pseudoParameterRef`. `Fn::Select` over one resolves to an
+  `availabilityZoneRef` (region + a known static index) rather than
+  `unresolved`, since the *position* is genuinely known even though the
+  actual zone name isn't.
+- **`Fn::Split` computes a real split when both its delimiter and source
+  string are literal** (unlike `Fn::GetAZs`, this is a pure string
+  operation with no deploy-time-only component) — resolves to `unresolved`
+  if either argument isn't statically determinable, most commonly because
+  the source is a parameter with no `Default` (a real fixture pattern:
+  `examples/14-diverse-corpus/quickstart-vpc-large.yaml` parses several
+  `"key=value"`-formatted tag parameters this way — correctly stays
+  unresolved there, since those specific parameters have no `Default`).
+- **`Fn::GetStackOutput` is recognized but never resolved** (PO Question
+  4e, surfaced during Sprint 2 Ticket 2.1's documentation research). Unlike
+  the intrinsics above, it's explicitly flagged — `resolveValue()` returns
+  `{kind: 'unresolved', reason: 'Fn::GetStackOutput is not yet supported'}`
+  rather than silently passing it through as an opaque object — since it
+  represents a real cross-account/cross-Region stack-output reference, not
+  an inert value. Not used by any `examples/` fixture; the available
+  CloudFormation User Guide document never states its actual argument
+  syntax (only cross-references a separate Template Reference Guide this
+  project doesn't have), so implementing full resolution now would mean
+  guessing at unconfirmed syntax. Tracked as a follow-up ticket.
+
+## Graph model (Sprint 2, Ticket 2.1)
+
+- **`buildGraph()` itself is still single-template only** — it builds a
+  `GraphModel` from one template; `graph/merge.ts`'s `mergeGraphs()`
+  (Ticket 2.3) is what combines N templates' `buildGraph()` results and
+  resolves `Fn::ImportValue` against another template's `Export.Name` into
+  `crossStackImport` edges. Both are now built (Tickets 2.1–2.4 complete)
+  — this split is an internal layering, not a gap.
+- **`Fn::GetStackOutput` produces no edge**, for the same reason it's
+  unresolved in the parser (see above) — there is currently no way to
+  represent this reference in the graph at all, not even as a flagged
+  warning. A template that relies on it will show that resource's property
+  as `unresolved`, but the graph itself won't surface a distinct
+  "cross-stack reference exists but isn't modeled" signal beyond that.
+- **`Metadata` is never walked for graph edges**, even though it's a valid
+  place to put arbitrary structured data (including, in principle,
+  intrinsics). Confirmed via direct fixture inspection that real templates'
+  `Metadata` usage is non-referential (linter/build-tool annotations); see
+  ADR 0002 for the full reasoning.
+
+## Export symbol table (Sprint 2, Ticket 2.2)
+
+- **A plain `Parameters` entry with no `Default` inside an export name is
+  never assumed** (e.g. `01-simple-lambda`'s `${EnvName}`) — only `AWS::*`
+  pseudo parameters get the assumed-value treatment (PO Question 4b). This
+  export name stays permanently unresolvable in v1, consistent with PO
+  Question 2 (no `--parameters` file).
+- **`AWS::NoValue`/`AWS::NotificationARNs` inside an export name are never
+  assumed** — a placeholder string wouldn't be meaningful for a
+  property-removal or list-typed pseudo parameter. An export name using
+  either stays unresolvable.
+- **The assumed-pseudo-parameter substitution only applies to
+  `Export.Name` resolution, never to an Output's `Value`.** A `Value`
+  expression that itself uses `AWS::Region` etc. still resolves via
+  Sprint 1's ordinary (never-guess) behavior — `pseudoParameterRef`, not a
+  literal. See ADR 0003 for why this scope is deliberate, not an oversight.
+- **`assumedStackName()`'s folder-vs-filename heuristic is a convention,
+  not a guarantee.** It's verified against every real multi-file
+  `examples/` layout available, but a project structure organized
+  differently from both (e.g. deeply nested folders where neither the
+  immediate filename nor the immediate parent folder is distinctive) could
+  still produce a collision. Any such collision surfaces as a
+  `duplicateExportName` conflict (never silently merged), so the failure
+  mode is "flagged ambiguity," not "wrong answer accepted as right."
+
+## Cross-stack import resolution (Sprint 2, Ticket 2.3)
+
+- **PO Question 4f's candidate-stack-name substitution forces *every*
+  `Parameters` reference in an import's export-name expression to the same
+  candidate value**, without identifying which specific parameter
+  represents "the exporting stack's name." Every real fixture uses exactly
+  one such parameter per import expression, so this is harmless in
+  practice, but a template combining two genuinely different
+  no-default-matching parameters in the same expression could in principle
+  produce a coincidental false match. Always labeled
+  `matchedVia: 'assumedCandidateStackName'` (the weakest match kind) so
+  this is visible rather than silent — see ADR 0004.
+- **`Fn::ImportValue` calls are found via a raw-AST structural scan
+  (`findImportValueCalls()`), separate from Sprint 1's `resolveValue()`
+  dispatch.** The two are kept in sync by both checking for the same
+  single-key-object shape (`{"Fn::ImportValue": ...}`), but they are
+  independent implementations — a future new `Fn::ImportValue` calling
+  convention would need updating in both places.
+- **A matched export whose `Value` doesn't resolve to a `resourceRef`/
+  `attributeRef` (e.g. a hardcoded literal string) produces no graph edge
+  at all**, even though the name genuinely matched — there's no distinct
+  signal in the graph that "this import is satisfied but points at
+  something that isn't a single resource," only the absence of an edge.
+- **Nested-stack outputs (`AWS::CloudFormation::Stack` + `Fn::GetAtt` to a
+  nested stack's `Outputs.*`, as used by `examples/06-nested-stack-quickstart`)
+  are a completely different mechanism from `Export`/`Fn::ImportValue` and
+  are not covered by this ticket at all** — they already resolve as an
+  ordinary `attributeRef` `reference` edge (Ticket 2.1), since from the
+  parent template's point of view a nested stack's outputs are just another
+  resource attribute, not a cross-stack import.
+
+## Real-world stress test (Sprint 2 wrap-up)
+
+Before Sprint 3 (rendering) builds on top of the graph model, the full
+parser + graph pipeline was run against 67 additional real, diverse
+templates fetched specifically for this (`examples/14-diverse-corpus`,
+provenance in its own `SOURCE.md`/`MANIFEST.tsv`) — spanning ~30 AWS
+service areas, three source repositories, SAM/`Transform`-using templates,
+`Fn::ForEach`, custom resources, StackSets, and one 1,765-line template —
+well beyond what examples 01–13 exercise individually, specifically to
+surface integration-level bugs before they'd be expensive to unwind.
+
+**Result: zero crashes** across all 67 individually and merged together at
+once (591 nodes, 731 edges, 1.8s). Two genuine gaps were found and fixed
+as a direct result (see "Parser scope" above): `Fn::GetAZs` (used in 13 of
+the 67 fixtures, previously unimplemented) and `Fn::Split` (its common
+pairing with `Fn::Select`). Every remaining `unresolved` result across the
+corpus was confirmed legitimate — genuinely dynamic `Fn::If`/
+`Fn::FindInMap` operands, parameters with no `Default`, and two templates
+(`gitea-solution.yaml`, `gitlab-server-solution.yaml`) with real dangling
+references to a companion "network stack" template not included in this
+fetch — not a single case traced back to a resolver bug.
+
+Merging all 67 together (a realistic "point ArchLens at a big glob of
+unrelated templates" scenario) also became the largest real confirmation
+of PO Question 4d's node-identity design: 59 logical IDs are genuinely
+reused across unrelated templates in this corpus (`InstanceSecurityGroup`
+alone appears in 10 of them) — every one would have silently collapsed
+into a single misleading node under logical-ID-only identity, and none
+did, since node identity always includes the origin file. This is now a
+permanent regression suite, not just a one-time pass —
+`src/graph/__test__/diverseCorpus.test.ts`.
