@@ -8,11 +8,16 @@ function shortType(type: string | undefined): string | undefined {
 }
 
 /**
- * Projects a real Sprint 2 `GraphModel` down to the renderer's thin
- * `RenderGraph` contract (see `types.ts`) — a focused converter for
- * `demo.ts`'s own manual-verification use, not yet the full CLI wiring
- * Ticket 3.4 owns (argument parsing, `--out`, load warnings surfaced to
- * the user, etc.), though the mapping itself is the same either way.
+ * Projects a real `GraphModel` down to the renderer's thin `RenderGraph`
+ * contract (see `types.ts`) — the original Sprint 2 1:1 view, unchanged
+ * since. Renamed from `fromGraphModel.ts` in Ticket A.10 (Sprint 3.5):
+ * once the Architecture Generator's `GraphModel -> ArchitectureGraph`
+ * stage exists, most rendering goes through a *cooked*
+ * `fromArchitectureGraph.ts` projection instead — this file is what
+ * `--raw` (PO Question 21: a fully supported flag, not a debug aid) and
+ * drill-down keep using, preserved exactly as-is on purpose. Wiring an
+ * actual `--raw` argv flag to it is Ticket 3.4's job (paused until after
+ * Sprint 3.5); this module is the projection that flag will call.
  * `GraphEdge`'s three kinds (`reference`/`dependsOn`/`crossStackImport`)
  * all carry `source`/`target`, so no per-kind branching is needed here.
  */

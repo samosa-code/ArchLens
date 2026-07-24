@@ -3,12 +3,11 @@
 Sprint 3's deliverable: turn a `GraphModel` (Sprint 2) into a self-contained
 `index.html` a user opens directly, no server, no network, no build step of
 their own. Ticket 3.1 built the bundle-and-inline pipeline itself, proven
-against a minimal hard-coded "hello world" graph. Ticket 3.2 (this
-document's current scope) replaces the hardcoded positions with a real
-layout algorithm (`@dagrejs/dagre`), adds pan/zoom, and upgrades the input
-shape from Ticket 3.1's toy `DemoGraph` to `RenderGraph` — a thin, stable
-projection of Sprint 2's `GraphNode`/`GraphEdge` (real `GraphModel` wiring
-is still Ticket 3.4's job; click-to-detail is Ticket 3.3's).
+against a minimal hard-coded "hello world" graph. Ticket 3.2 replaced the
+hardcoded positions with a real layout algorithm (`@dagrejs/dagre`) and
+added pan/zoom. Ticket 3.3 added click-for-details. Ticket 3.4 (done after
+Sprint 3.5 landed) is the real `npx archlens <glob> --out <dir>` CLI that
+wires all of it together end to end.
 
 **Full design rationale:** [ADR 0005](adr/0005-render-bundling-and-browser-test-tooling.md)
 (Ticket 3.1 — bundler, test tooling, Node/browser TypeScript split) and
@@ -22,12 +21,18 @@ companion.
 | Module | Runs in | Responsibility |
 |---|---|---|
 | `render/build.ts` | Node (`tsconfig.json`) | Bundles `browser/app.ts` via `esbuild`, inlines it + `style.css` into `template.html` |
-| `render/types.ts` | Both | `RenderNode`/`RenderEdge`/`RenderGraph` — deliberately DOM-free so both sides can share one definition (see ADR 0005's "real gotcha") |
+| `render/types.ts` | Both | `RenderNode`/`RenderEdge`/`RenderContainer`/`RenderGraph` — deliberately DOM-free so both sides can share one definition (see ADR 0005's "real gotcha") |
 | `render/layout.ts` | Both | `computeLayout()` — wraps `@dagrejs/dagre`, DOM-free (Ticket 3.2) |
-| `render/browser/app.ts` | Browser (`tsconfig.browser.json`) | Reads the graph (baked in as a literal at bundle time), lays it out, draws it as SVG, wires up pan/zoom |
-| `render/browser/template.html` | Browser | HTML skeleton with two placeholder comments for the inlined style/script |
-| `render/browser/style.css` | Browser | Minimal node/edge styling |
-| `render/demo.ts` | Node | `npm run render:demo` — writes a real, openable `archlens-output/index.html` for manual verification (now a 24-node sample graph) |
+| `render/fromGraphModelRaw.ts` | Node | The Sprint 2 1:1 projection — every resource its own box, nothing absorbed. `--raw`'s data source (Ticket A.10) |
+| `render/fromArchitectureGraph.ts` | Node | The Sprint 3.5 "cooked" projection — `ArchitectureGraph → RenderGraph`, carrying everything the detail panel needs (Ticket 3.3) |
+| `render/filterByLayer.ts` | Node | `filterRenderGraphByLayer()` — the `--layer=<list>`/`--hide-monitoring` post-filter over an already-built `RenderGraph` (Ticket 3.4) |
+| `cli.ts` | Node | `npx archlens <glob...> --out <dir>` — the real end-to-end entry point: argv parsing, pipeline selection (`--raw` vs. the Architecture Generator), filtering, `--explain`, and writing the HTML (Ticket 3.4) |
+| `render/browser/app.ts` | Browser (`tsconfig.browser.json`) | Reads the graph (baked in as a literal at bundle time), lays it out, draws it as SVG, wires up pan/zoom and click-for-details |
+| `render/browser/template.html` | Browser | HTML skeleton: two placeholder comments for the inlined style/script, plus the static `#archlens-panel` skeleton (Ticket 3.3) |
+| `render/browser/style.css` | Browser | Node/edge/panel/container/icon styling |
+| `render/demo.ts` | Node | `npm run render:demo` — writes a real, openable `archlens-output/index.html` for manual verification, now running the real 5-template merge through the full `GraphModel → ArchitectureGraph → RenderGraph` pipeline (Ticket 3.3) |
+| `render/icons.ts` | Node | `loadIconDataUris()` — scans `assets/icons/*.svg` into a `{serviceKey: data-URI}` map, baked into the bundle the same way as the graph (Ticket 3.6.2) |
+| `render/crossings.ts` | Both | `countEdgeCrossings()` — a pure geometric edge-crossing-count metric over `LayoutEdge.points`, used to measure real before/after clutter (Ticket 3.6.3) |
 
 ## Pipeline
 
@@ -88,13 +93,88 @@ stance.
 
 ## Rendering and sizing (`render/browser/app.ts`)
 
-Node size is a heuristic from label length (`sizeNode()`) — real DOM text
-measurement isn't available to `layout.ts` (it's DOM-free, and runs
-identically in Node for its own tests), so this is a deliberate
-approximation, not an oversight. Nodes render as `<rect>` + centered
-`<text>`; edges render as `<path>` through dagre's own routed polyline
-points (`edgePointsToPathData()`), not straight lines computed
-independently of the actual layout.
+Node size comes from real DOM text measurement (`createLabelMeasurer()`'s
+hidden, off-screen `<text>` + `getComputedTextLength()`), not a
+character-count heuristic — `layout.ts` itself is DOM-free and can't
+measure text, so `app.ts`'s `sizeNode()` measures the real label first and
+passes the actual pixel width in.
+
+**Two node shapes (Ticket 3.6.3's visual redesign):** a node whose
+`service` has a real icon (`assets/icons/<key>.svg`, via `icons.ts`)
+renders as a big square icon (`NODE_ICON_SIZE`, 56px) with the label
+centered below it — no bordered card around them, matching a supplied
+AWS-style reference diagram. A node with no covered icon instead renders
+as a roughly square placeholder box (`NODE_PLACEHOLDER_SIZE`, a 64px
+floor) with the label centered inside — the classic bordered-rect look,
+just square instead of the original wide 80×40 rectangle. Both shapes
+still draw exactly one `<rect>` per node (real, visible border for the
+placeholder shape; `fill: transparent; stroke: none` via
+`.archlens-node--icon rect` for the icon shape) — a uniform click
+hit-area and geometry contract across every node, regardless of which
+shape it is.
+
+Edges render as `<path>` through dagre's own routed polyline points
+(`edgePointsToPathData()`), post-processed by `layout.ts`'s
+`toOrthogonalPoints()` (Ticket 3.6.3) into an all-right-angle path — a
+genuinely diagonal segment gets one vertical-horizontal-vertical elbow
+inserted at its midpoint-y; a segment that's already axis-aligned is left
+untouched. See "Edge crossings and routing" below for the measured
+before/after numbers.
+
+## Edge crossings and routing (Ticket 3.6.3)
+
+Two independent, additive changes, measured separately and together
+against the real 67-template `14-diverse-corpus` merge (207 nodes, 55
+containers, 141 edges — `crossingBaseline.test.ts`'s own fixture) via a
+new pure metric, `crossings.ts`'s `countEdgeCrossings()` (a standard
+orientation/cross-product proper-segment-intersection test over every
+distinct pair of edges' rendered polylines):
+
+| Configuration | Crossing count |
+|---|---|
+| Original baseline (`ranker: 'network-simplex'` — dagre's default —, straight-line edges) | 107 |
+| `ranker: 'longest-path'` alone, straight-line edges | 66 |
+| `ranker: 'longest-path'` + orthogonal edge routing (**shipped**) | 92 |
+
+**`ranker: 'longest-path'`** (both `layoutComponentCompound()` and
+`layoutComponentFlatFallback()`'s `graph.setGraph()` calls) was the single
+biggest lever found — tried per the ticket's own prescribed order before
+touching anything else: `tight-tree` measured *worse* than the default
+(115); `longest-path` measured substantially better (66, ~38% down from
+the original baseline), at the same `nodesep`/`ranksep` and no diagram-size
+cost. Widening `nodesep`/`ranksep`/`edgesep` further didn't reduce
+crossings any more, just used more space, so the original spacing was
+kept.
+
+**Orthogonal edge routing** (`toOrthogonalPoints()` in `layout.ts`) was
+added on top, per the ticket's own explicit ask for right-angle lines
+matching a supplied reference diagram, not chosen purely to minimize the
+raw number — and a real, honest finding: it actually *raises* the raw
+crossing count relative to straight lines at the same ranker (66 → 92).
+Each diagonal becomes a 3-segment elbow, and the added horizontal "jog"
+segments are more prone to crossing other edges' jogs at similar
+y-levels than a single diagonal would have been. Kept anyway: 92 is still
+a real ~14% improvement over the original 107, and — as the ticket's own
+testing requirements note — crossing count is a proxy for visual clutter,
+not the definition of it; a manual eyeball pass against the same corpus
+fixture (real Chromium screenshots, not just the number) confirmed
+right-angle routing reads as noticeably cleaner than the original diagonal
+lines, matching well-established graph-drawing readability results.
+
+**A distinct, honest finding from that same eyeball pass**: for this
+specific 67-*independent*-template corpus, the dominant clutter factor
+isn't really edge crossings at all — it's the sheer *width* of the
+shelf-packed diagram (ADR 0006's packing produces one very wide,
+mostly-one-row-tall strip for many small disconnected components side by
+side). Real crossings are concentrated within each small component's own
+subgraph, which a zoomed screenshot confirmed route cleanly with no
+diagonal lines left. Diagram width/shape is ADR 0006's/the packing
+algorithm's domain, not something this ticket was scoped to change.
+
+`crossingBaseline.test.ts` locks the shipped combination in with headroom
+(`<= 100`, not brittle to an exact `92`) against the same real fixture, so
+a future change can't silently regress this back toward the original
+baseline.
 
 ## Pan/zoom
 
@@ -106,6 +186,120 @@ adjusts `s`, anchored so the point under the cursor stays fixed
 the new scale), clamped to `[0.05, 4]`. On first render, `computeInitialViewport()`
 scales/centers the diagram to fit the viewport — otherwise a large (e.g.
 1,000-node) diagram would open showing only a small corner of itself.
+
+## Click-for-details panel (Ticket 3.3)
+
+`#archlens-panel` is a static, always-present skeleton in `template.html`
+(hidden via its `hidden` attribute) — never built fresh per click.
+Clicking a `.archlens-node` populates its header (label,
+`type · layer`, `file:line`), a security-finding callout (shown only when
+the node actually has one — never for every node), one collapsible
+section per absorbed-resource group that has anything in it (an empty
+group is omitted entirely, never rendered blank), and a Connections
+section listing every `RenderEdge` touching the node with its role label
+and an arrow showing which side is which (`verb → other` outbound,
+`verb ← other` inbound).
+
+**Per-item finding tint, not per-section.** Only the specific absorbed
+resource a finding names (`RenderAbsorbedResource.hasFinding`, computed in
+`fromArchitectureGraph.ts` by matching `Badge.sourceNodeId`) gets the
+warning style — never every item in its section, which the original
+design mockup got wrong (recorded in `SPRINT-PLAN.md` as a bug in the
+mockup, not something to reproduce).
+
+**A real bug this ticket found and fixed:** `setupPanZoom`'s
+`pointerdown` handler called `svg.setPointerCapture(...)`
+unconditionally. Per spec, pointer capture redirects the matching
+`pointerup` — and the `mouseup` synthesized from it — to the capturing
+element (`svg`) regardless of where the pointer physically is. Since
+browsers compute the synthetic `click` event from where `mousedown` and
+`mouseup` landed, capturing the pointer to `svg` on every `pointerdown`
+meant a click starting on a node's `mousedown` but redirected to `svg` on
+`mouseup` never produced a `click` on the node at all — Playwright's
+real mouse-simulated `.click()` silently did nothing, while a synthetic
+`dispatchEvent(new MouseEvent('click'))` worked fine, which is what
+isolated the cause. Fixed by skipping drag-initiation entirely when a
+`pointerdown`'s target is inside a `.archlens-node` — panning from empty
+canvas is unaffected.
+
+**"View source" is real `file:line` text, not a clickable link** — a
+statically-exported, self-contained HTML file has no real target to jump
+to (no editor integration, no browser support for `file://...#Lnn`), and
+a non-functional link that looks clickable would be dishonest UI.
+
+## Container nesting: real boundary rectangles (Ticket 3.6.1)
+
+Containers (`RenderContainer[]`, from `fromArchitectureGraph.ts`'s
+`ArchitectureGraph.containers`) were data-only through Ticket 3.3 —
+`fromArchitectureGraph.ts` carried `RenderNode.containerId`/
+`RenderContainer.parentId`, but nothing read them, so any VPC-only
+template rendered a blank canvas even with real containers present (found
+via a real usage question — see `SPRINT-PLAN.md`'s Sprint 3.6 note).
+
+`layout.ts`'s `computeLayout()` now lays containers out via
+`@dagrejs/dagre`'s own compound-graph support (`new dagre.graphlib.Graph({
+compound: true })`, `setParent()`), extracting a real `x/y/width/height`
+for every container the same way it does for nodes. Every container is
+given an explicit `minWidth`/`minHeight` floor sized from its label
+(`sizeContainer()` in `app.ts`, mirroring `sizeNode()`) — confirmed
+directly that dagre gives a childless, unsized cluster node no
+`width`/`height` at all otherwise, while a populated container still
+auto-expands well beyond that floor to fit its real contents.
+
+`findConnectedComponents()` treats container membership as connectivity,
+not just real edges — a VPC and a subnet connected *only* by containment
+(no edge between them at all) must still land in the same connected
+component, or they'd risk being packed onto different shelves.
+
+**A real `@dagrejs/dagre` limitation, not an ArchLens bug:** compound mode
+combined with certain edge/cluster shapes throws `"Not possible to find
+intersection inside of the rectangle"` from inside dagre's own
+edge-routing — confirmed via direct experimentation this isn't simply a
+scale problem (a 200-node/20-container case fails; an otherwise-identical
+500-node case doesn't) and that tuning `ranker` or container sizes doesn't
+reliably avoid it. `layoutComponent()` tries the compound layout first and
+falls back to `layoutComponentFlatFallback()` on any thrown error: a flat
+(non-compound) dagre layout for real node positions, with each
+container's box then computed as the padded bounding-box union of its
+members'/child containers' positions, deepest-first. See
+`LIMITATIONS.md` for the user-facing framing of this trade-off.
+
+`app.ts`'s `renderSvgContent()` draws one `.archlens-container` rect +
+label per entry in `layout.containers`, appended to the SVG *before* the
+edge/node loops so containers always paint as the backmost layer, and
+sorted parent-before-child (`sortContainersByDepth()`) so nesting reads
+correctly when boundaries are adjacent.
+
+## The CLI (Ticket 3.4)
+
+`cli.ts`'s `main()`: parse argv (`parseArgs()`) → resolve glob patterns
+to real files (`resolveInputFiles()`, unchanged since Sprint 2) →
+`loadTemplates()` → `mergeGraphs()` → `buildRenderGraph()` (picks `--raw`'s
+`fromGraphModelRaw.ts` or the default `generate()` +
+`fromArchitectureGraph.ts`, then applies `--layer`/`--hide-monitoring` via
+`filterByLayer.ts`, and builds the `--explain` report string when asked)
+→ `writeHtml()`. `--out` defaults to `./archlens-output`, **relative to
+the caller's `process.cwd()`**, never to wherever the package itself is
+installed — the opposite of how `render/demo.ts`/`architecture/demo.ts`
+anchor their own fixed dev-only output paths, and a real bug (below) when
+the two got confused.
+
+**A real bug found by the end-to-end subprocess test, not by
+inspection:** the first draft computed the default output directory via
+`fileURLToPath(new URL('../archlens-output/', import.meta.url))` — anchored
+to `cli.ts`'s own location. That's exactly right for the fixed dev-only
+demo scripts, and exactly wrong for a real CLI: every user's diagram
+would have been written into wherever `archlens` happens to be installed,
+not their own project directory. Caught by a subprocess test that
+actually changes `cwd` before invoking the CLI (`cli.e2e.test.ts`'s
+"default output path" test) — a unit test calling `parseArgs()` directly
+would never have noticed, since it never has its own separate process
+CWD to get wrong.
+
+**`--explain`/`--layer`/`--hide-monitoring` are documented no-ops with
+`--raw`,** not silently ignored: `buildRenderGraph()` prints a stderr
+notice when any of them are combined with `--raw`, since the 1:1 view has
+no abstraction decisions or layers for them to act on.
 
 ## Testing approach
 
@@ -157,6 +351,39 @@ passing again after reverting.
    `layout.test.ts`'s own faster, browser-free 1,000-node layout-only
    check.
 
+`src/render/__test__/panel.test.ts` (Ticket 3.3) — real-browser, real
+click events, following the same `beforeAll`-shared-browser pattern:
+header content, per-group section presence/omission and count badges,
+per-item finding tint (not per-section), findings-callout presence/
+absence, Connections labeling and direction, close button, and that
+clicking a different node replaces panel content rather than stacking.
+Assertions use plain `Locator` methods (`.textContent()`, `.count()`,
+`.isHidden()`, `.evaluate()` for class checks) rather than
+`@playwright/test`'s extended matchers, which aren't registered under
+this project's own `vitest`-based `expect` — confirmed directly after the
+first draft of this file used them and failed with "Invalid Chai
+property" errors. `src/render/__test__/fromArchitectureGraph.test.ts`
+covers the Node-side projection: real-fixture cases (absorbed groups,
+containers, connector-derived edge kinds) plus synthetic cases for
+finding/tint logic the real pipeline can't produce yet (no security/cost
+rule engine exists before Sprint 9).
+
+`src/render/__test__/filterByLayer.test.ts` (Ticket 3.4) — pure-function
+tests for the `--layer`/`--hide-monitoring` post-filter, including the
+"a node with no `layer` at all always survives" case (the `--raw`
+projection) and composition (`--hide-monitoring` wins even when
+`monitoring` is explicitly in the `--layer` allowlist). `src/__test__/cli.test.ts`
+covers `parseArgs()`/`buildRenderGraph()` directly (fast, no subprocess).
+`src/__test__/cli.e2e.test.ts` is Ticket 3.4's own explicit testing
+requirement — the CLI run as a real subprocess against real fixtures,
+using the project's own `tsc` build (`dist/cli.js`) rather than bundling
+`cli.ts` with `esbuild` the way `render/build.ts` bundles `browser/app.ts`:
+that was tried first and broke at runtime, since `jsonc-parser`'s UMD
+module does a dynamic `require('./impl/format')` esbuild can't resolve
+once flattened into one file. The real project build has no such
+problem — proven, and it's exactly what every other demo script here
+already does.
+
 ## A note on test-suite stability
 
 Adding a second Chromium-launching test file (this ticket's
@@ -179,4 +406,7 @@ under its own internal 5s budget.
 - [ADR 0006: Layout algorithm, pan/zoom, and visual-regression approach](adr/0006-layout-algorithm-and-pan-zoom-choice.md)
 - [`docs/graph-architecture.md`](graph-architecture.md) — Sprint 2's
   `GraphModel` this sprint renders (full wiring: Ticket 3.4)
+- [`docs/architecture-generation.md`](architecture-generation.md) —
+  Sprint 3.5's `ArchitectureGraph`, the shape `fromArchitectureGraph.ts`
+  projects into `RenderGraph` (Ticket 3.3)
 - [`docs/developer-guide.md`](developer-guide.md) — project-wide doc index

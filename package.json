@@ -4,6 +4,9 @@
   "description": "ArchLens helps engineers understand infrastructure architecture through interactive queries, visual diffs, and impact analysis",
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "archlens": "dist/cli.js"
+  },
   "engines": {
     "node": ">=18"
   },
@@ -14,7 +17,9 @@
     "lint": "eslint .",
     "build": "tsc --project tsconfig.build.json",
     "demo": "npm run build && node dist/cli.js",
-    "render:demo": "npm run build && node dist/render/demo.js"
+    "render:demo": "npm run build && node dist/render/demo.js",
+    "arch:demo": "npm run build && node dist/architecture/demo.js",
+    "arch:corpus-report": "npm run build && node dist/architecture/corpus-report.js"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

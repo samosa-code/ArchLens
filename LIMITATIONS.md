@@ -211,3 +211,76 @@ into a single misleading node under logical-ID-only identity, and none
 did, since node identity always includes the origin file. This is now a
 permanent regression suite, not just a one-time pass —
 `src/graph/__test__/diverseCorpus.test.ts`.
+
+## Render layer (Sprint 3, Tickets 3.1–3.3)
+
+- **Same-`logicalId` labels across a multi-stack merge are visually
+  indistinguishable.** Two resources named `Service` in different
+  templates (a real case: `examples/03-multi-stack-ecs-fargate`) render
+  as two boxes both labeled "Service," with nothing in the diagram itself
+  telling them apart (found during Sprint 3.5's Ticket A.11 eyeball test).
+  Node identity is still correct internally (`${file}#${logicalId}`, PO
+  Question 4d) — this is a display-only gap. Disambiguating the visible
+  label on a collision is a scoped future ticket, not fixed yet.
+- **Container nesting now renders as real, labeled, nested boundary
+  rectangles (Ticket 3.6.1)** — `ArchitectureGraph`'s containers
+  (VPC/Subnet/cluster/stack/account/region) and each node's `containerId`
+  (carried through to `RenderGraph` since Ticket 3.3) are laid out via
+  `@dagrejs/dagre`'s native compound-graph mode (`compound: true` +
+  `setParent()`) and drawn as `.archlens-container` rects, behind every
+  node/edge, sorted parent-before-child. See `docs/render-architecture.md`
+  for the mechanism.
+- **A real `@dagrejs/dagre` compound-mode limitation, worked around via a
+  flat-layout fallback.** Certain moderate-scale compound graphs (confirmed
+  directly: ~200 nodes / 20 containers with chain+hub edges) make dagre's
+  own edge-routing throw `"Not possible to find intersection inside of the
+  rectangle"` — confirmed not simply a scale problem (a 500-node case with
+  the identical shape does not crash) and not reliably avoidable by tuning
+  `ranker` or container minimum sizes. `computeLayout()` catches this and
+  falls back to `layoutComponentFlatFallback()`: a non-compound dagre
+  layout for real node positions, with each container's box then computed
+  as the padded bounding-box union of its members/children. Nodes and
+  containers still never overlap incorrectly under the fallback, but the
+  fallback's boxes are a manual approximation rather than dagre's own
+  compound-aware placement, so packing can look less tight than the
+  primary path on an affected component.
+- **"View source" in the detail panel is plain `file:line` text, not a
+  clickable link.** A statically-exported, self-contained `index.html`
+  (Ticket 3.1's whole premise) has nothing real to jump to — no editor
+  integration, and browsers don't support `file://...#Lnn` anyway. A
+  non-functional link that looks clickable would be worse than honest
+  text.
+- **Detail-panel security/cost findings depend on a rule engine that
+  doesn't exist yet** (Sprint 9). The panel's finding callout and
+  per-item warning tint are fully built and tested (synthetic fixtures,
+  since `ArchNode.badges` is always empty from the real pipeline today),
+  but nothing populates a real `Badge` until Sprint 9 lands.
+- **Real service icons now render for 44 of the ~50 service keys
+  `rules.ts` uses (Ticket 3.6.2)** — pulled from the official AWS
+  Architecture Icons pack, inlined as `data:image/svg+xml;base64,...` URIs
+  (never a runtime-fetched image `src`, so Ticket 3.1's one-file/
+  zero-network invariant still holds). Coverage is intentionally partial,
+  not a gap to silently patch over: `datapipeline` and `iotanalytics` have
+  no matching icon in the current pack (both are legacy/deprecated AWS
+  services no longer in AWS's own current icon set) and correctly fall
+  back to the pre-existing plain-text subtitle — the same fallback every
+  uncovered service already used before this ticket. See
+  `docs/developer-guide.md`'s icon-asset section for the naming
+  convention a contributor adding coverage should follow.
+- **Edge crossings are measurably reduced, not eliminated, and the metric
+  isn't the whole story (Ticket 3.6.3).** `ranker: 'longest-path'` +
+  orthogonal (right-angle) edge routing together cut the real 67-template
+  corpus's measured crossing count from 107 to 92 (~14%) — genuinely
+  better, never "zero crossings," which is impossible in general for a
+  non-planar graph. A real, honest complication: orthogonal routing alone
+  actually *raises* the raw crossing count versus straight lines at the
+  same ranker (66 → 92, see `docs/render-architecture.md`'s "Edge
+  crossings and routing" section for the full before/after table) — kept
+  anyway because it was an explicit visual request (right-angle lines,
+  matching a supplied reference diagram) and reads as measurably cleaner
+  in practice, even though the raw number alone doesn't capture that. A
+  separate, distinct finding from the same manual review: for a corpus of
+  many small *independent* templates specifically, diagram **width**
+  (ADR 0006's shelf-packing) is the more dominant real clutter factor than
+  crossings — untouched by this ticket, since that's the packing
+  algorithm's own domain.

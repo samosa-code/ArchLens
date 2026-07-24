@@ -162,8 +162,259 @@ fix — sharing one browser process per test file instead of per test —
 that came out of adding this ticket's tests)
 
 **Try it:** `npm run render:demo` writes a real, openable
-`archlens-output/index.html` — now a 24-node sample architecture; try
-dragging to pan and scrolling to zoom.
+`archlens-output/index.html`; try dragging to pan and scrolling to zoom.
+
+---
+
+## Click-for-details side panel (Sprint 3, Ticket 3.3)
+
+Clicking a node opens `#archlens-panel` (a static, always-present
+skeleton toggled via its `hidden` attribute) with header info
+(label/type/layer/file:line), a security-finding callout shown only when
+present, one collapsible section per absorbed-resource group that
+actually has something in it, and a Connections section listing
+arch-level edges with role labels. Per-item warning tint only marks the
+specific item a finding names — never every item in its section.
+
+Pulled forward `fromArchitectureGraph.ts` (the `ArchitectureGraph →
+RenderGraph` projection originally filed under Ticket 3.4) as this
+ticket's own prerequisite, since the panel can't show `ArchNode`-shaped
+content without it — see `SPRINT-PLAN.md`'s 2026-07-23 scope decision.
+
+**A real bug found via real-browser testing:** the pan/zoom handler's
+unconditional `svg.setPointerCapture()` on every `pointerdown` silently
+broke node clicks entirely (pointer capture redirects the matching
+`mouseup` to `svg`, so the browser never synthesizes a `click` on the
+node). Fixed by skipping drag-initiation when the `pointerdown` target is
+inside a `.archlens-node`.
+
+**Modules:** `src/render/fromArchitectureGraph.ts`,
+`src/render/browser/app.ts` (panel logic), `src/render/types.ts`
+(`RenderAbsorbedResource`/`RenderBadge`/`RenderContainer`)
+
+**Full detail:** [`docs/render-architecture.md`](render-architecture.md)
+— the panel's exact content model, the pointer-capture bug, and what was
+deliberately deferred at the time (a real "View source" link — no real
+target/mechanism exists for one yet). Visual container nesting was the
+other deferred item here — since built, see Sprint 3.6's Ticket 3.6.1
+below.
+
+**Try it:** `npm run render:demo` now runs the real 5-template merge
+through the full `GraphModel → ArchitectureGraph → RenderGraph` pipeline
+— click any node to see its detail panel.
+
+---
+
+## CLI: `npx archlens <glob> --out <dir>` (Sprint 3, Ticket 3.4)
+
+`cli.ts`'s `main()` wires the full pipeline end to end:
+`resolveInputFiles()` → `loadTemplates()` → `mergeGraphs()` →
+`buildRenderGraph()` (picks `--raw` or the Architecture Generator, applies
+`--layer`/`--hide-monitoring` via `filterByLayer.ts`, builds the
+`--explain` report) → `writeHtml()`. Sprint 2's `resolveInputFiles()`/
+`summarize()` are unchanged and still exported (own tests still pass);
+`summarize()` just isn't what the CLI prints by default anymore.
+
+**Naming:** implemented as `archlens`, not the sprint plan's own ticket
+text (`cfn-viz`, an earlier working name) — `internal-docs/PRD.md` (the
+authoritative spec), `package.json`'s `"name"`, and every other doc in
+this repo already consistently say `archlens`.
+
+**A real bug found by the end-to-end subprocess test, not by
+inspection:** the default `--out` path was first anchored to `cli.ts`'s
+own install location (`import.meta.url`) — exactly right for the fixed
+dev-only demo scripts, exactly wrong for a real CLI, since every user's
+diagram would land inside wherever `archlens` is installed rather than
+their own project. A subprocess test that actually changes `cwd` before
+invoking the CLI caught it directly; a unit test calling `parseArgs()` in
+the same process never would have, since it has no separate CWD to get
+wrong. Fixed to `process.cwd()`-relative.
+
+**Modules:** `src/cli.ts`, `src/render/filterByLayer.ts`
+
+**Full detail:** [`docs/render-architecture.md`](render-architecture.md)
+— the full pipeline wiring and the CWD bug in detail.
+
+**Try it:** `npx archlens ./examples/01-simple-lambda/template.yaml --out ./diagram`
+(or, in this repo without a global install: `npm run demo -- <glob> --out <dir>`).
+See the README's "CLI usage" section for the full flag reference.
+
+---
+
+## Architecture Generator (Sprint 3.5, Tickets A.1–A.11)
+
+Turns Sprint 2's raw, nothing-discarded `GraphModel` into a reduced,
+human-readable `ArchitectureGraph` via six deterministic passes:
+classify (rule table → structural heuristic → kept-unknown) → build
+containers → resolve detail/connector ownership → emit connector edges
+against the intact graph → reparent + dedupe (provenance unioned, never
+discarded) → layer-index-driven direction inference + the synthetic
+Internet/Users node. An accounting invariant (`decisions.length ===
+graph.nodes.length`) holds at every stage — every input resource has
+exactly one recorded fate, always inspectable via `--explain`.
+
+**Modules:** `src/architecture/{types,rules,classify,containers,
+ownership,connectors,reparent,layers,synthetic,metadata,generate,
+explain}.ts` — see `docs/architecture-generation.md`'s module map for
+each file's exact responsibility.
+
+**Full detail:** [`docs/architecture-generation.md`](architecture-generation.md)
+— the six-pass pipeline walked in order, the module map, testing
+approach, and the Ticket A.11 corpus-validation results (98.5% rule
+coverage; the documented SAM reduction-ratio shortfall, root-caused not
+hidden; the two real eyeball-test findings).
+
+**Related:** [ADR 0007](adr/0007-architecture-abstraction-layer.md)
+(the four-role split; why layers are rule-assigned, not
+topology-derived) · [ADR 0008](adr/0008-connector-resources-as-edges.md)
+(the sprint's single most important decision — connector resources
+become edges, not absorbed details) · [ADR 0009](adr/0009-layer-and-direction-inference.md)
+(direction inference; the synthetic Internet/Users node) ·
+[`internal-docs/SPRINT-PLAN.md`](../internal-docs/SPRINT-PLAN.md) (the
+full A.1–A.11 ticket history and findings)
+
+**Try it:** `npm run arch:demo` (a real 5-template merge — components by
+layer, container tree, connector-derived edges, direction-inferred/
+flagged edges, the synthetic node) and `npm run arch:corpus-report`
+(per-fixture reduction ratio/rule coverage across the full 67-template
+corpus).
+
+---
+
+## Container nesting: real boundary rectangles (Sprint 3.6, Ticket 3.6.1)
+
+Closes the gap Ticket 3.3 deliberately deferred: `RenderGraph.containers`
+had real data (VPC/Subnet/cluster/stack/account/region boundaries) since
+Ticket 3.3, but nothing ever read it — confirmed directly that a VPC-only
+template (`examples/02-complex-vpc-nat`: 0 `ArchNode`s, 5 `ArchContainer`s)
+rendered a completely blank canvas. `layout.ts`'s `computeLayout()` now
+lays containers out via `@dagrejs/dagre`'s compound-graph mode
+(`compound: true`, `setParent()`), and `app.ts` draws one
+`.archlens-container` rect + label per container, behind every edge/node.
+
+**Two real findings, both from this ticket's own mutation-testing
+discipline, not user feedback:** (1) a childless, unsized dagre cluster
+node gets no `width`/`height` at all — fixed by giving every container an
+explicit label-derived `minWidth`/`minHeight` floor. (2) dagre's own
+compound-mode edge-routing throws on certain moderate-scale shapes (not a
+pure scale effect — confirmed a 500-node case with the same shape doesn't
+crash) — fixed via a `layoutComponentFlatFallback()` that computes
+container boxes as a manual bounding-box union when the primary compound
+layout throws.
+
+**Modules:** `src/render/layout.ts` (`LayoutContainerInput`,
+`layoutComponentCompound`/`layoutComponentFlatFallback`,
+`findConnectedComponents` now treating containment as connectivity),
+`src/render/browser/app.ts` (`sizeContainer()`, container-drawing loop in
+`renderSvgContent()`), `src/render/browser/style.css`
+(`.archlens-container`)
+
+**Full detail:** [`docs/render-architecture.md`](render-architecture.md#container-nesting-real-boundary-rectangles-ticket-361)
+— the dagre compound-mode mechanism, the two mutation-testing findings,
+and the flat-layout fallback's trade-offs. [`LIMITATIONS.md`](../LIMITATIONS.md)
+states the fallback's user-facing framing.
+
+**Try it:** `npm run render:demo`, or `npx archlens examples/02-complex-vpc-nat/template.yaml`
+— the VPC + 4 subnets now render as real nested boxes instead of a blank
+canvas.
+
+---
+
+## Real AWS service icons (Sprint 3.6, Ticket 3.6.2)
+
+`RenderNode.service` (e.g. `'lambda'`, `'dynamodb'`) has existed since
+Ticket 3.3 as a plain-text subtitle only — real icon graphics were
+originally scoped to Sprint 13. Pulled forward here once real icon assets
+became available: the user supplied the official AWS Architecture Icons
+pack (`Architecture-Service-Icons`), from which the ~50 service keys
+`src/architecture/rules.ts` actually uses were identified, matched to
+their official filenames, and curated down + renamed to `assets/icons/
+<service-key>.svg` (SVG only — the pack's PNGs, other icon families
+(`Resource-Icons`, `Category-Icons`, `Architecture-Group-Icons`), and
+`__MACOSX`/`.DS_Store` zip artifacts were all deleted, not kept
+"just in case"). 44 of ~50 keys have a real icon; `datapipeline` and
+`iotanalytics` don't (both legacy/deprecated services absent from the
+current pack) and correctly fall back to the pre-existing text subtitle.
+
+**Adding icon coverage for a new service key:** drop an SVG at
+`assets/icons/<service-key>.svg`, named to match the exact string
+`rules.ts` assigns that type's `service` field. Nothing else to register
+or wire up — `icons.ts`'s `loadIconDataUris()` scans the directory at
+build time and keys the result by filename, so there is no separate
+map to fall out of sync with the files on disk. A `.svg` file that isn't
+actually valid SVG markup fails the build loudly (an explicit error
+naming the file), rather than silently shipping a broken icon.
+
+**Mechanism:** `build.ts` calls `loadIconDataUris('assets/icons/')` and
+bakes the resulting `{serviceKey: data-URI}` map into the bundle via the
+same `esbuild` `define` mechanism `__ARCHLENS_GRAPH_DATA__` already uses
+— each icon becomes a literal `data:image/svg+xml;base64,...` string in
+the shipped JS, never a `<img src="...">` pointing at a file the browser
+would need to fetch (Ticket 3.1's "one file, zero network requests"
+invariant, re-verified by `build.test.ts` after this change, not just
+assumed to still hold). `app.ts`'s node-drawing loop renders a real
+`<image class="archlens-node-icon">` in place of the old
+`.archlens-node-service` text — never both on the same node — sized from
+a fixed 20×20 box to the label's left, with `sizeNode()` reserving that
+extra width only for nodes that actually have a covered service (an
+uncovered service's node stays exactly as narrow as before this ticket).
+
+**Modules:** `src/render/icons.ts` (`loadIconDataUris`), `src/render/build.ts`
+(`ICONS_DIR`, wiring the icon map into esbuild's `define`),
+`src/render/browser/app.ts` (icon-vs-text-fallback branch in
+`renderSvgContent()`, `sizeNode()`'s `hasIcon` parameter),
+`src/render/browser/style.css` (`.archlens-node-icon`)
+
+**Full detail:** [`LIMITATIONS.md`](../LIMITATIONS.md) states the
+partial-coverage framing (which 2 keys fall back to text, and why).
+
+**Try it:** `node dist/cli.js "examples/03-multi-stack-ecs-fargate/**/template.yaml" --out <dir>`
+then open `<dir>/index.html` — the Lambda/DynamoDB/etc. nodes in that
+fixture render their real AWS icons instead of a plain-text service name.
+
+---
+
+## Edge crossing reduction & node visual redesign (Sprint 3.6, Ticket 3.6.3)
+
+Two changes, both driven directly by a user-supplied reference diagram:
+right-angle (orthogonal) edge routing in place of straight diagonal lines,
+and a redesigned node shape — a big square icon with its label below it,
+or a square placeholder box with the label inside for a node with no
+covered icon (see "Real AWS service icons" above for coverage).
+
+**Measure first, per the ticket's own prescribed order:** before changing
+anything, built a real, pure metric (`crossings.ts`'s
+`countEdgeCrossings()`) and measured it against the real 67-template
+`14-diverse-corpus` merge: 107 crossings at dagre's default `ranker:
+'network-simplex'`. Tried `tight-tree` (worse, 115) and `longest-path`
+(better, 66 — ~38% down, the single biggest lever, no diagram-size cost)
+before touching routing at all. Orthogonal routing (`toOrthogonalPoints()`
+in `layout.ts`) was added on top per the ticket's explicit visual ask, not
+purely to chase the number — and a real, honestly-recorded finding: it
+raises the metric back up to 92 (still ~14% better than the original 107,
+but worse than straight lines at the same ranker), because each diagonal
+becomes a 3-segment elbow whose horizontal "jog" is itself more prone to
+crossing other edges' jogs. Kept anyway: a manual eyeball pass (real
+Chromium screenshots of the same corpus fixture) confirmed right-angle
+routing reads as genuinely cleaner, and the ticket's own testing
+requirements explicitly acknowledge the metric alone doesn't capture that.
+
+**Modules:** `src/render/crossings.ts` (`countEdgeCrossings`),
+`src/render/layout.ts` (`toOrthogonalPoints`, the `ranker: 'longest-path'`
+change in both `graph.setGraph()` calls), `src/render/browser/app.ts`
+(`sizeNode()`'s two-shape branch, the icon/placeholder draw logic in
+`renderSvgContent()`), `src/render/browser/style.css`
+(`.archlens-node--icon rect`)
+
+**Full detail:** [`docs/render-architecture.md`](render-architecture.md#edge-crossings-and-routing-ticket-363)
+— the full before/after crossing-count table, and the separate finding
+that diagram *width* (not crossings) is the dominant clutter factor for
+a corpus of many independent templates specifically. [`LIMITATIONS.md`](../LIMITATIONS.md)
+states the user-facing framing.
+
+**Try it:** `npm run render:demo`, or open any previously-generated
+diagram — every edge now routes in clean right angles, and every icon-
+covered node renders as a big colored square with its label underneath.
 
 ---
 

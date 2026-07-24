@@ -1,0 +1,26 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Spoke account, replica region: read replica of the app's data path.
+  Part of the synthetic multi-account fixture (see SOURCE.md).
+Metadata:
+  ArchLens:
+    account: Spoke (444455556666)
+    region: eu-west-1
+Resources:
+  ReplicaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Code:
+        ZipFile: exports.handler = async () => {};
+  ReplicaTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH

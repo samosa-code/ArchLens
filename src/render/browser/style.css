@@ -50,3 +50,154 @@ body {
   stroke: var(--archlens-secondary-dark);
   stroke-width: 1.5;
 }
+
+/* Delivery styling (PO Question 23): async hand-offs render dashed, sync stays solid. */
+.archlens-edge[data-delivery="async"] {
+  stroke-dasharray: 6 4;
+}
+
+.archlens-node {
+  cursor: pointer;
+}
+
+/* Real service icon (Ticket 3.6.2) — replaces `.archlens-node-service`'s text subtitle entirely when one's available, so no extra rule needed to hide the other; they're never both present on the same node. */
+.archlens-node-icon {
+  pointer-events: none;
+}
+
+/*
+ * Ticket 3.6.3's visual redesign: an icon node's backing rect (`app.ts`
+ * always draws one, for a uniform click hit-area/geometry contract across
+ * every node) stays completely invisible here — the icon square + label
+ * below it ARE the node's whole visible shape, not a bordered card around
+ * them, matching the supplied reference diagram's style.
+ */
+.archlens-node--icon rect {
+  fill: transparent;
+  stroke: none;
+}
+
+/*
+ * Container boundaries (Ticket 3.6.1): drawn behind every node/edge, so
+ * they must never compete visually with the real components they hold —
+ * a soft dashed border and near-transparent fill, distinct from
+ * `.archlens-node`'s solid card style. Not clickable (no panel exists
+ * for a container), so pointer events pass through to whatever's inside.
+ */
+.archlens-container {
+  pointer-events: none;
+}
+
+.archlens-container rect {
+  fill: var(--archlens-secondary-light);
+  fill-opacity: 0.15;
+  stroke: var(--archlens-secondary-dark);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+
+.archlens-container-label {
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--archlens-text-secondary);
+}
+
+.archlens-node-service {
+  font-size: 9px;
+  fill: var(--archlens-text-secondary);
+}
+
+/*
+ * Ticket 3.3's click-for-details panel: a fixed right-hand sidebar,
+ * hidden by default (`[hidden]` is a real attribute here, not just a
+ * class — toggled directly by app.ts rather than layered CSS states).
+ */
+#archlens-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 340px;
+  height: 100vh;
+  overflow-y: auto;
+  background: #ffffff;
+  border-left: 1px solid var(--archlens-secondary);
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.08);
+  padding: 16px;
+  box-sizing: border-box;
+  font-size: 13px;
+  color: var(--archlens-text-primary);
+}
+
+#archlens-panel[hidden] {
+  display: none;
+}
+
+#archlens-panel-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  border: none;
+  background: none;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--archlens-text-secondary);
+}
+
+.archlens-panel-title {
+  margin: 0 24px 4px 0;
+  font-size: 16px;
+}
+
+.archlens-panel-subtitle {
+  color: var(--archlens-text-secondary);
+  font-size: 12px;
+}
+
+.archlens-panel-source {
+  color: var(--archlens-text-secondary);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.archlens-panel-findings {
+  margin-top: 12px;
+  padding: 8px;
+  background: #fdf1ec;
+  border: 1px solid var(--archlens-accent);
+  border-radius: 4px;
+  color: var(--archlens-primary-dark);
+}
+
+.archlens-panel-findings[hidden] {
+  display: none;
+}
+
+.archlens-panel-section {
+  margin-top: 16px;
+}
+
+.archlens-panel-section-header {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.archlens-panel-item {
+  padding: 4px 0;
+  border-bottom: 1px solid #eee;
+}
+
+/* Per-item warning tint (PO Question 24) — only an item a real finding names, never every item in its section. */
+.archlens-panel-item--finding {
+  color: var(--archlens-primary-dark);
+  background: #fdf1ec;
+}
+
+.archlens-panel-connections {
+  margin-top: 16px;
+}
+
+.archlens-panel-connection {
+  padding: 4px 0;
+  border-bottom: 1px solid #eee;
+}

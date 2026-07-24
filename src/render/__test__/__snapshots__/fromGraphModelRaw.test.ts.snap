@@ -1,0 +1,24 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`graphModelToRenderGraph (the --raw projection) — regression lock > 01-simple-lambda: output matches the locked snapshot 1`] = `
+{
+  "edges": [
+    {
+      "source": "C:\\Users\\Suraj Singh\\Desktop\\company_repo\\samosacode\\ArchLens\\examples\\01-simple-lambda\\template.yaml#LambdaFunction",
+      "target": "C:\\Users\\Suraj Singh\\Desktop\\company_repo\\samosacode\\ArchLens\\examples\\01-simple-lambda\\template.yaml#LambdaRole",
+    },
+  ],
+  "nodes": [
+    {
+      "id": "C:\\Users\\Suraj Singh\\Desktop\\company_repo\\samosacode\\ArchLens\\examples\\01-simple-lambda\\template.yaml#LambdaRole",
+      "label": "LambdaRole (IAM::Role)",
+      "type": "AWS::IAM::Role",
+    },
+    {
+      "id": "C:\\Users\\Suraj Singh\\Desktop\\company_repo\\samosacode\\ArchLens\\examples\\01-simple-lambda\\template.yaml#LambdaFunction",
+      "label": "LambdaFunction (Lambda::Function)",
+      "type": "AWS::Lambda::Function",
+    },
+  ],
+}
+`;

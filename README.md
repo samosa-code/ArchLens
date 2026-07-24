@@ -39,10 +39,11 @@ view it, no AWS credentials required. Static analysis only.
 ## Status
 
 ✅ **Sprint 1 (parser) is complete.** ✅ **Sprint 2 (graph model) is
-complete through Ticket 2.4.** 🚧 **Sprint 3 (rendering) is in progress
-— Tickets 3.1 (HTML bundle scaffolding) and 3.2 (layout & SVG rendering)
-done.** Scoped from a PRD and sprint/ticket plan (see `internal-docs/`,
-kept local/untracked for now).
+complete through Ticket 2.4.** ✅ **Sprint 3 (rendering) is complete**
+(Tickets 3.1–3.4, the last two done after Sprint 3.5 landed — see below).
+✅ **Sprint 3.5 (Architecture Generator) is complete** (Tickets A.1–A.12).
+Scoped from a PRD and sprint/ticket plan (see `internal-docs/`, kept
+local/untracked for now).
 Implementation follows the build order: parser → graph model → render →
 search → blast radius → export → security/cost flags → diff → CI
 integration → polish.
@@ -59,25 +60,100 @@ Sprint 2 delivered: a resource graph (`GraphNode`/`GraphEdge`) built from
 one template, an export/import symbol table across N templates (with an
 explicitly-labeled "assumed" resolution strategy for the deploy-time-only
 values, like `AWS::StackName`, that real export names are built from — see
-"How multi-stack merging works" below), cross-stack `Fn::ImportValue`
-resolution into `crossStackImport` edges, and a CLI demo
-(`npm run demo -- "<glob>"`) that runs the whole pipeline and prints a
-summary. See [`docs/graph-architecture.md`](docs/graph-architecture.md)
-for that pipeline end to end.
+"How multi-stack merging works" below), and cross-stack `Fn::ImportValue`
+resolution into `crossStackImport` edges. See
+[`docs/graph-architecture.md`](docs/graph-architecture.md) for that
+pipeline end to end.
 
-Sprint 3 so far: the bundle-and-inline pipeline that turns a graph into
-one self-contained `index.html` (Ticket 3.1) — `esbuild` bundles the
-browser-side renderer with its data baked in as a literal, zero network
-requests once opened, verified with a real headless browser — plus real
-graph layout via `@dagrejs/dagre`, drag-to-pan/wheel-to-zoom, and
-responsive rendering up to 1,000 nodes (Ticket 3.2). Run
-`npm run render:demo` to write a real, openable 24-node example. Still a
-synthetic sample graph, not the real pipeline — that wiring is Ticket 3.4.
-See [`docs/render-architecture.md`](docs/render-architecture.md).
+Sprint 3.5 (inserted between Tickets 3.3 and 3.4 once it became clear the
+naive "draw every resource as a box" approach silently deletes real
+architecture — see [ADR 0008](docs/adr/0008-connector-resources-as-edges.md))
+delivered the Architecture Generator: `GraphModel → ArchitectureGraph`,
+the six-pass reduction that turns a raw, hundreds-of-resources graph into
+a handful of real logical components. See
+[`docs/architecture-generation.md`](docs/architecture-generation.md).
+
+Sprint 3 delivered the full render pipeline on top of that: the
+bundle-and-inline pipeline that turns a graph into one self-contained
+`index.html` (Ticket 3.1) — `esbuild` bundles the browser-side renderer
+with its data baked in as a literal, zero network requests once opened,
+verified with a real headless browser — real graph layout via
+`@dagrejs/dagre`, drag-to-pan/wheel-to-zoom, and responsive rendering up
+to 1,000 nodes (Ticket 3.2), a click-for-details side panel (Ticket 3.3),
+and the real CLI, `npx archlens <glob> --out <dir>` (Ticket 3.4 — see
+"CLI usage" below). Run `npm run render:demo` for a real, openable
+example without installing anything: the same real 5-template merge as
+`npm run arch:demo`, run through the full `GraphModel → ArchitectureGraph
+→ RenderGraph` pipeline. See
+[`docs/render-architecture.md`](docs/render-architecture.md).
 
 [`docs/developer-guide.md`](docs/developer-guide.md) is the project-wide
 doc index across all sprints, and [`LIMITATIONS.md`](LIMITATIONS.md)
 tracks what's deliberately not supported yet.
+
+## How to use the diagram (Sprint 3, Ticket 3.3)
+
+Open the generated `index.html` in a browser (no server, no network —
+everything is baked into the one file):
+
+- **Pan** — click and drag anywhere on empty canvas.
+- **Zoom** — scroll/pinch; zoom is anchored to your cursor position and
+  clamped so you can't zoom out past being useless or in past being
+  meaningless.
+- **Click any box** to open its detail panel on the right: what it is
+  (type, layer, and where it's declared in your template), a security-
+  finding callout if it has one, everything CloudFormation-level that got
+  folded into it (grouped as Permissions / Networking / Observability /
+  Lifecycle / Plumbing — only the groups that actually have something in
+  them appear), and a Connections list showing what it talks to and how
+  (e.g. "invokes → RestApi", "reads/writes ← PutItemsFunction (lambda)").
+- **Close the panel** with the × button, or click a different box to
+  replace its contents.
+
+Two things the panel deliberately does *not* do yet, so you're not
+surprised: it doesn't draw VPC/Subnet/account boundaries as nested boxes
+on the canvas (the containment relationship exists in the data — a
+future ticket adds the visual nesting); and `file:line` in the panel is
+plain text, not a clickable "jump to source" link — a self-contained
+exported HTML file has nothing to jump *to*.
+
+## CLI usage (Sprint 3, Ticket 3.4)
+
+```
+npx archlens <glob-or-file...> [--out <dir>] [--raw] [--explain] [--layer=<list>] [--hide-monitoring]
+```
+
+Point it at one or more CloudFormation template files (or glob patterns —
+`./infra/**/*.yaml` works, matching any number of files across any number
+of directories). Every matched file is loaded, merged into one graph
+(cross-stack `Fn::ImportValue`s resolved where possible), reduced by the
+Architecture Generator, and written out as one self-contained,
+openable-offline `index.html` — no server, no build step, no network
+request once it's open.
+
+```
+$ npx archlens ./infra/**/*.yaml --out ./diagram
+Wrote ./diagram/index.html
+```
+
+**Flags:**
+
+| Flag | Effect |
+|---|---|
+| `--out <dir>` | Where to write `index.html`. Defaults to `./archlens-output` (relative to wherever you ran the command) when omitted. |
+| `--raw` | Skip the Architecture Generator entirely — every CloudFormation resource gets its own box, 1:1 with the raw graph. For when you don't trust the abstraction and want to see everything, or you're debugging the generator itself. |
+| `--explain` | Alongside writing the HTML, prints every `AbstractionDecision` to stdout (what happened to each resource, and why) plus the `unknownTypes` worklist ranked by frequency — the signal for which rule to add next. Has no effect combined with `--raw` (the 1:1 view has no abstraction decisions to report). |
+| `--layer=<list>` | Comma-separated allowlist (e.g. `--layer=compute,data`) — only components in these layers survive; everything else (and any edge touching a dropped node) is left out of the diagram. Has no effect combined with `--raw` (no layer concept there). |
+| `--hide-monitoring` | Opt-out: hides the `monitoring` layer (CloudWatch, X-Ray). Monitoring is **visible by default** — this is the only way to turn it off, there's no equivalent opt-in flag. Has no effect combined with `--raw`. |
+
+A pattern matching no files, or an unrecognized flag, fails clearly with
+a message on stderr and a non-zero exit code rather than writing an empty
+or partial diagram.
+
+See "How to use the diagram" above for what to do once `index.html` is
+open, and [`docs/render-architecture.md`](docs/render-architecture.md)/
+[`docs/architecture-generation.md`](docs/architecture-generation.md) for
+how the pipeline behind it works.
 
 ## How multi-stack merging works
 

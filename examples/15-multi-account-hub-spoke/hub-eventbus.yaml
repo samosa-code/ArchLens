@@ -1,0 +1,17 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Hub account: central event bus receiving events from spoke accounts.
+  Part of the synthetic multi-account fixture (see SOURCE.md).
+Metadata:
+  ArchLens:
+    account: Hub (111122223333)
+    region: us-east-1
+Resources:
+  CentralBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: central-bus
+  AuditQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: hub-audit-queue
